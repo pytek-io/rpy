@@ -1,2 +1,2 @@
-# fountainhead
-Persisted event processing.
+# transactor
+simple stored event queue solution
