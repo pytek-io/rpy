@@ -5,7 +5,7 @@ import threading
 import traceback
 from functools import partial, wraps
 from itertools import count
-from typing import Any, Optional
+from typing import Any, Optional, Iterator
 import asyncio
 
 import anyio
@@ -22,6 +22,7 @@ from .client_async import (
 from .client_async import Client as AsyncClient
 from .client_async import _create_async_client
 from .common import async_null_context
+from .connection import wrap_websocket_connection
 
 
 def evaluate_in_background_thread(method):
@@ -113,7 +114,9 @@ class Client:
                 try:
                     m = await self.to_background.async_q.get()
                 except asyncio.CancelledError:
-                    self.from_background.async_q.put_nowait((EXCEPTION, Exception("Connection to server reset.")))
+                    self.from_background.async_q.put_nowait(
+                        (EXCEPTION, Exception("Connection to server reset."))
+                    )
                     break
                 code, data = m
                 if code is SHUTDOWN:
@@ -150,7 +153,7 @@ class Client:
 
 
 @contextlib.contextmanager
-def create_sync_client(host_name: str, port: str):
+def create_sync_client(host_name: str, port: str, name: str) -> Iterator[Client]:
     client, stop_async = None, None
     ready = threading.Event()
 
@@ -158,14 +161,15 @@ def create_sync_client(host_name: str, port: str):
         nonlocal client, stop_async
         stop_async = janus.Queue()
         async with anyio.create_task_group() as task_group:
-            async with _create_async_client(
-                task_group, host_name, port
-            ) as async_client:
-                client = Client(async_client)
-                task_group.start_soon(client.process_calls_from_foreground_thread)
-                ready.set()
-                await stop_async.async_q.get()
-                task_group.cancel_scope.cancel()
+            async with wrap_websocket_connection(host_name, port) as connection:
+                async with _create_async_client(
+                    task_group, connection, name
+                ) as async_client:
+                    client = Client(async_client)
+                    task_group.start_soon(client.process_calls_from_foreground_thread)
+                    ready.set()
+                    await stop_async.async_q.get()
+                    task_group.cancel_scope.cancel()
 
     threading.Thread(target=partial(anyio.run, run), daemon=True).start()
     try:

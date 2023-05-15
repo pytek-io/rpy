@@ -1,9 +1,10 @@
-import pytest
 import anyio
+import pytest
+
 from fountainhead.common import create_context_async_generator
 
 
-async def cancellable_stream(sink, flag):
+async def cancellable_stream_example(sink, flag):
     try:
         for i in range(10):
             await sink(i)
@@ -17,7 +18,7 @@ async def test_cancellable_async_generator():
     async def test(stop):
         flag = {"value": False}
         context_async_generator = create_context_async_generator(
-            cancellable_stream, flag
+            cancellable_stream_example, flag
         )
         async with context_async_generator as value_stream:
             async for value in value_stream:

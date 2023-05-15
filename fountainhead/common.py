@@ -1,6 +1,7 @@
 import contextlib
 import anyio
 from typing import Any, AsyncIterable, AsyncContextManager, Callable
+import traceback
 
 
 async def forward_stream(stream, sink):
@@ -48,3 +49,9 @@ async def create_context_async_generator(
         task_group.cancel_scope.cancel()
 
 
+@contextlib.contextmanager
+def print_stack_if_error_and_carry_on():
+    try:
+        yield
+    except:
+        traceback.print_exc()

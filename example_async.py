@@ -23,7 +23,7 @@ async def subscribe_to_events(client: Client, topic):
 
 
 async def main_async(args):
-    async with create_async_client(args.host, args.port) as client:
+    async with create_async_client(args.host, args.port, "client") as client:
         async with anyio.create_task_group() as task_group:
             for i in range(1):
                 topic = f"uploads/client_{i}"

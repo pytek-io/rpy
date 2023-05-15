@@ -1,5 +1,5 @@
 import contextlib
-
+import websockets
 from msgpack import dumps, loads
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
@@ -23,3 +23,12 @@ class Connection:
 
     async def close(self):
         await self.websocket.close()
+
+    async def wait_closed(self):
+        self.websocket.wait_closed()
+
+
+@contextlib.asynccontextmanager
+async def wrap_websocket_connection(host_name: str, port: int):
+    async with websockets.connect(f"ws://{host_name}:{port}") as raw_websocket:
+        yield Connection(raw_websocket)

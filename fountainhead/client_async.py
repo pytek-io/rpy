@@ -1,16 +1,16 @@
 import contextlib
-import datetime
+from datetime import datetime
 import logging
 import traceback
 from itertools import count
-from typing import Any, Optional
+from typing import Any, Optional, AsyncIterable
 
 import anyio
 import websockets
 from msgpack import dumps, loads  # could be any arbitrary serialization method
 
 from .common import create_context_async_generator
-from .connection import Connection
+from .connection import Connection, wrap_websocket_connection
 
 OK = "OK"
 START_TASK = "Start task"
@@ -21,9 +21,9 @@ CANCEL_TASK = "Cancel task"
 EXCEPTION = "Exception"
 
 
-class Client:
+class ClientBase:
     def __init__(
-        self, task_group, connection, serializer=None, deserializer=None
+        self, task_group, connection, serializer=None, deserializer=None, name=None
     ) -> None:
         super().__init__()
         self.task_group = task_group
@@ -32,6 +32,7 @@ class Client:
         self.deserializer = deserializer or loads
         self.request_id = count()
         self.pending_requests = {}
+        self.name = name
 
     async def close(self):
         logging.info("Closing connection.")
@@ -42,6 +43,7 @@ class Client:
         await self.connection.send(args)
 
     async def process_messages_from_server(self):
+        await self.send(self.name)
         try:
             while True:
                 message = await self.connection.recv()
@@ -61,7 +63,7 @@ class Client:
         except websockets.exceptions.ConnectionClosedOK:
             pass
 
-    async def send_command(self, command, *args):
+    async def send_command(self, command, args, process_value = None):
         request_id = next(self.request_id)
         sink, stream = anyio.create_memory_object_stream()
         try:
@@ -70,7 +72,7 @@ class Client:
             success, result = await stream.receive()
             if not success:
                 raise Exception(result)
-            return result
+            return process_value(result) if process_value else result
         finally:
             self.pending_requests.pop(request_id)
 
@@ -92,36 +94,53 @@ class Client:
             await self.send(request_id, None, None)
             self.pending_requests.pop(request_id)
 
+
+class Client(ClientBase):
     def read_events(
         self,
         topic: str,
-        start: datetime.datetime,
-        end: Optional[datetime.datetime],
+        start: datetime,
+        end: Optional[datetime],
         time_stamps_only=False,
     ):
         if time_stamps_only:
-            process_value = datetime.datetime.fromtimestamp
+            process_value = datetime.fromtimestamp
         else:
-            def process_value(time_stamp, value):
-                return datetime.datetime.fromtimestamp(time_stamp), loads(value)
-            
+            process_value = lambda time_stamp, value: (
+                datetime.fromtimestamp(time_stamp),
+                loads(value),
+            )
+
         return create_context_async_generator(
-            self.subscribe_stream, "read_events", (topic, start, end, time_stamps_only), process_value
+            self.subscribe_stream,
+            "read_events",
+            (topic, start, end, time_stamps_only),
+            process_value,
         )
 
-    async def save_event(self, topic: str, event: Any):
-        return await self.send_command("save_event", topic, self.serializer(event))
+    async def save_event(self, topic: str, event: Any) -> datetime:
+        return await self.send_command(
+            "save_event", (topic, self.serializer(event)), datetime.fromtimestamp
+        )
+
+    async def read_event(self, topic: str, time_stamp: datetime.fromtimestamp):
+        return await self.send_command("read_event", (topic, time_stamp.timestamp()), self.deserializer)
 
 
 @contextlib.asynccontextmanager
-async def _create_async_client(task_group, host_name: str, port: str) -> Client:
-    async with websockets.connect(f"ws://{host_name}:{port}") as raw_websocket:
-        client = Client(task_group, Connection(raw_websocket))
-        task_group.start_soon(client.process_messages_from_server)
-        yield client
+async def _create_async_client(
+    task_group, connection: Connection, name: str
+) -> AsyncIterable[Client]:
+    client = Client(task_group, connection, name=name)
+    task_group.start_soon(client.process_messages_from_server)
+    yield client
+
 
 @contextlib.asynccontextmanager
-async def create_async_client(host_name: str, port: str) -> Client:
+async def create_async_client(
+    host_name: str, port: str, name: str
+) -> AsyncIterable[Client]:
     async with anyio.create_task_group() as task_group:
-        async with _create_async_client(task_group, host_name, port) as client:
-            yield client
+        async with wrap_websocket_connection(host_name, port) as connection:
+            async with _create_async_client(task_group, connection, name) as client:
+                yield client
