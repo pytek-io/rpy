@@ -1,24 +1,18 @@
+import asyncio
 import contextlib
-import datetime
 import inspect
 import threading
 import traceback
+from datetime import datetime
 from functools import partial, wraps
 from itertools import count
-from typing import Any, Optional, Iterator
-import asyncio
+from typing import Any, Iterator, Optional
 
 import anyio
 import janus
 
-from .client_async import (
-    CANCEL_TASK,
-    CLOSE_SENTINEL,
-    EXCEPTION,
-    OK,
-    SHUTDOWN,
-    START_TASK,
-)
+from .client_async import (CANCEL_TASK, CLOSE_SENTINEL, EXCEPTION, OK,
+                           SHUTDOWN, START_TASK)
 from .client_async import Client as AsyncClient
 from .client_async import _create_async_client
 from .common import async_null_context
@@ -141,15 +135,21 @@ class Client:
     def read_events(
         self,
         topic: str,
-        start: datetime.datetime,
-        end: Optional[datetime.datetime],
-        time_stamps_only=False,
+        start: Optional[datetime],
+        end: Optional[datetime],
+        time_stamps_only: bool = False,
     ):
         return self.async_client.read_events(topic, start, end, time_stamps_only)
 
     @evaluate_in_background_thread
-    async def save_event(self, topic: str, event: Any):
-        return await self.async_client.save_event(topic, event)
+    async def write_event(
+        self,
+        topic: str,
+        event: Any,
+        time_stamp: Optional[datetime.fromtimestamp] = None,
+        override: bool = False,
+    ):
+        return await self.async_client.write_event(topic, event, time_stamp, override)
 
 
 @contextlib.contextmanager

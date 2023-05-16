@@ -6,6 +6,7 @@ from itertools import count
 from typing import Any, Optional, AsyncIterable
 
 import anyio
+from anyio.abc import TaskStatus
 import websockets
 from msgpack import dumps, loads  # could be any arbitrary serialization method
 
@@ -22,6 +23,8 @@ EXCEPTION = "Exception"
 
 
 class ClientBase:
+    """Implements non functional specific details"""
+
     def __init__(
         self, task_group, connection, serializer=None, deserializer=None, name=None
     ) -> None:
@@ -42,8 +45,11 @@ class ClientBase:
     async def send(self, *args):
         await self.connection.send(args)
 
-    async def process_messages_from_server(self):
+    async def process_messages_from_server(
+        self, task_status: TaskStatus = anyio.TASK_STATUS_IGNORED
+    ):
         await self.send(self.name)
+        task_status.started()
         try:
             while True:
                 message = await self.connection.recv()
@@ -63,7 +69,7 @@ class ClientBase:
         except websockets.exceptions.ConnectionClosedOK:
             pass
 
-    async def send_command(self, command, args, process_value = None):
+    async def send_command(self, command, args, process_value=None):
         request_id = next(self.request_id)
         sink, stream = anyio.create_memory_object_stream()
         try:
@@ -99,9 +105,9 @@ class Client(ClientBase):
     def read_events(
         self,
         topic: str,
-        start: datetime,
-        end: Optional[datetime],
-        time_stamps_only=False,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        time_stamps_only: bool = False,
     ):
         if time_stamps_only:
             process_value = datetime.fromtimestamp
@@ -118,13 +124,28 @@ class Client(ClientBase):
             process_value,
         )
 
-    async def save_event(self, topic: str, event: Any) -> datetime:
+    async def write_event(
+        self,
+        topic: str,
+        event: Any,
+        time_stamp: Optional[datetime] = None,
+        override: bool = False,
+    ) -> datetime:
         return await self.send_command(
-            "save_event", (topic, self.serializer(event)), datetime.fromtimestamp
+            "write_event",
+            (
+                topic,
+                self.serializer(event),
+                time_stamp.timestamp() if time_stamp else None,
+                override,
+            ),
+            datetime.fromtimestamp,
         )
 
     async def read_event(self, topic: str, time_stamp: datetime.fromtimestamp):
-        return await self.send_command("read_event", (topic, time_stamp.timestamp()), self.deserializer)
+        return await self.send_command(
+            "read_event", (topic, time_stamp.timestamp()), self.deserializer
+        )
 
 
 @contextlib.asynccontextmanager
@@ -132,7 +153,7 @@ async def _create_async_client(
     task_group, connection: Connection, name: str
 ) -> AsyncIterable[Client]:
     client = Client(task_group, connection, name=name)
-    task_group.start_soon(client.process_messages_from_server)
+    await task_group.start(client.process_messages_from_server)
     yield client
 
 

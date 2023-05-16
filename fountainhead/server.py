@@ -1,10 +1,10 @@
 import argparse
-import datetime
+from datetime import datetime
 import logging
 import os
 import signal
 import traceback
-from typing import Dict, Set
+from typing import Dict, Set, Optional, ByteString
 
 import anyio
 import websockets
@@ -13,6 +13,10 @@ from .connection import Connection
 from .common import print_stack_if_error_and_carry_on
 
 SUBSCRIPTION_BUFFER_SIZE = 100
+
+
+class UserException(Exception):
+    pass
 
 
 class Client:
@@ -33,6 +37,8 @@ class Client:
         except anyio.get_cancelled_exc_class():
             send_termination = False
             raise
+        except UserException as e:
+            success, result = False, e.args
         except:
             success, result = False, traceback.format_exc()
         if send_termination:
@@ -84,11 +90,13 @@ class Client:
 
 
 class ServerBase:
+    """Implements non functional specific details"""
+
     def __init__(self, event_folder, task_group) -> None:
         self.task_group = task_group
         self.event_folder = event_folder
         self.commands = {
-            "save_event": (True, self.save_event),
+            "write_event": (True, self.write_event),
             "read_event": (True, self.read_event),
             "read_events": (False, self.read_events),
         }
@@ -102,14 +110,30 @@ class ServerBase:
     async def manage_client_session_raw(self, raw_websocket):
         await self.manage_client_session(Connection(raw_websocket))
 
-    async def save_event(self, client: Client, request_id: int, topic: str, event):
+    async def write_event(
+        self,
+        client: Client,
+        request_id: int,
+        topic: str,
+        event: ByteString,
+        time_stamp: Optional[datetime],
+        override: bool,
+    ):
         if topic.startswith("/"):
             topic = topic[1:]
         folder_path = os.path.join(self.event_folder, topic)
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
-        time_stamp = datetime.datetime.now().timestamp()
+        time_stamp = (
+            datetime.now().timestamp()
+            if time_stamp is None
+            else datetime.fromtimestamp(time_stamp)
+        )
         file_path = os.path.join(folder_path, str(time_stamp))
+        if os.path.exists(file_path) and not override:
+            raise UserException(
+                "Trying to override an existing event without override set to True."
+            )
         async with await anyio.open_file(file_path, "wb") as file:
             await file.write(event)
         logging.info(f"Saved event from {client} under: {file_path}")
@@ -125,25 +149,28 @@ class ServerBase:
 class Server(ServerBase):
     async def read_events(
         self,
-        _client: Client,
+        client: Client,
         request_id: int,
         topic: str,
-        start: datetime.datetime,
-        end: datetime.datetime,
+        start: Optional[datetime],
+        end: Optional[datetime],
         time_stamps_only: bool,
     ):
         sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
         subscriptions = self.subscriptions[topic]
         try:
-            subscriptions[topic].add((request_id, sink))
+            subscriptions.add((request_id, sink))
             folder_path = os.path.join(self.event_folder, topic)
             if os.path.exists(folder_path):
-                time_stamps = [
-                    time_stamp
-                    for time_stamp in map(float, os.listdir(folder_path))
-                    if time_stamp > start
-                    and (True if end is None else time_stamp < end)
-                ]
+                time_stamps = map(float, os.listdir(folder_path))
+                if start is not None:
+                    time_stamps = (
+                        time_stamp for time_stamp in time_stamps if time_stamp >= start
+                    )
+                if end is not None:
+                    time_stamps = (
+                        time_stamp for time_stamp in time_stamps if time_stamp <= end
+                    )
                 if time_stamps_only:
                     result = time_stamps
                 else:
@@ -158,15 +185,20 @@ class Server(ServerBase):
                             )
                         )
                 yield result
-            while end is None or datetime.datetime.now().timestamp() < end:
+            while end is None or datetime.now().timestamp() < end:
                 time_stamp = await stream.receive()
                 yield [
                     time_stamp
                     if time_stamps_only
-                    else (time_stamp, await self.read_event(topic, str(time_stamp)))
+                    else (
+                        time_stamp,
+                        await self.read_event(
+                            client, request_id, topic, str(time_stamp)
+                        ),
+                    )
                 ]
         finally:
-            subscriptions.remove(sink)
+            sink not in subscriptions or subscriptions.remove(sink)
 
     async def read_event(
         self, _client: Client, request_id: int, topic: str, time_stamp: float

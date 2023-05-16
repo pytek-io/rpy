@@ -11,7 +11,7 @@ from fountainhead import create_async_client, Client
 async def write_events(client, topic):
     while True:
         await anyio.sleep(random.random() * 5)
-        time_stamp = await client.save_event(topic, {"origin": "sftp", "s3": "fdsljd"})
+        time_stamp = await client.write_event(topic, {"origin": "sftp", "s3": "fdsljd"})
         logging.info(f"Saved {topic} event at {time_stamp}")
 
 
