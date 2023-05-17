@@ -8,7 +8,7 @@ from typing import Any, Optional, AsyncIterable
 import anyio
 from anyio.abc import TaskStatus
 import websockets
-from msgpack import dumps, loads  # could be any arbitrary serialization method
+from pickle import dumps, loads  # could be any arbitrary serialization method
 
 from .common import create_context_async_generator
 from .connection import Connection, wrap_websocket_connection
@@ -22,7 +22,7 @@ CANCEL_TASK = "Cancel task"
 EXCEPTION = "Exception"
 
 
-class ClientBase:
+class AsyncClientBase:
     """Implements non functional specific details"""
 
     def __init__(
@@ -101,7 +101,7 @@ class ClientBase:
             self.pending_requests.pop(request_id)
 
 
-class Client(ClientBase):
+class AsyncClient(AsyncClientBase):
     def read_events(
         self,
         topic: str,
@@ -110,10 +110,10 @@ class Client(ClientBase):
         time_stamps_only: bool = False,
     ):
         if time_stamps_only:
-            process_value = datetime.fromtimestamp
+            process_value = None
         else:
             process_value = lambda time_stamp, value: (
-                datetime.fromtimestamp(time_stamp),
+                time_stamp,
                 loads(value),
             )
 
@@ -133,26 +133,20 @@ class Client(ClientBase):
     ) -> datetime:
         return await self.send_command(
             "write_event",
-            (
-                topic,
-                self.serializer(event),
-                time_stamp.timestamp() if time_stamp else None,
-                override,
-            ),
-            datetime.fromtimestamp,
+            (topic, self.serializer(event), time_stamp, override),
         )
 
-    async def read_event(self, topic: str, time_stamp: datetime.fromtimestamp):
+    async def read_event(self, topic: str, time_stamp: datetime):
         return await self.send_command(
-            "read_event", (topic, time_stamp.timestamp()), self.deserializer
+            "read_event", (topic, time_stamp), self.deserializer
         )
 
 
 @contextlib.asynccontextmanager
 async def _create_async_client(
     task_group, connection: Connection, name: str
-) -> AsyncIterable[Client]:
-    client = Client(task_group, connection, name=name)
+) -> AsyncIterable[AsyncClient]:
+    client = AsyncClient(task_group, connection, name=name)
     await task_group.start(client.process_messages_from_server)
     yield client
 
@@ -160,7 +154,7 @@ async def _create_async_client(
 @contextlib.asynccontextmanager
 async def create_async_client(
     host_name: str, port: str, name: str
-) -> AsyncIterable[Client]:
+) -> AsyncIterable[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with wrap_websocket_connection(host_name, port) as connection:
             async with _create_async_client(task_group, connection, name) as client:

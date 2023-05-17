@@ -5,7 +5,7 @@ import random
 
 import anyio
 
-from fountainhead import create_async_client, Client
+from fountainhead import create_async_client, AsyncClient
 
 
 async def write_events(client, topic):
@@ -15,9 +15,9 @@ async def write_events(client, topic):
         logging.info(f"Saved {topic} event at {time_stamp}")
 
 
-async def subscribe_to_events(client: Client, topic):
+async def subscribe_to_events(client: AsyncClient, topic):
     start = datetime.now() - timedelta(minutes=100)
-    async with client.read_events(topic, start.timestamp(), None) as events:
+    async with client.read_events(topic, start, None) as events:
         async for time_stamp, content in events:
             print(f"Received {topic} {time_stamp} {content}")
 
@@ -30,9 +30,12 @@ async def main_async(args):
                 task_group.start_soon(write_events, client, topic)
                 task_group.start_soon(subscribe_to_events, client, topic)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="Client test")
-    parser.add_argument("host", type=str, help="server host name", nargs="?", default="localhost")
+    parser.add_argument(
+        "host", type=str, help="server host name", nargs="?", default="localhost"
+    )
     parser.add_argument("port", type=int, help="tcp port", nargs="?", default=8765)
     args = parser.parse_args()
     anyio.run(main_async, args)

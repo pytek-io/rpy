@@ -6,7 +6,7 @@ import anyio
 import anyio.abc
 import pytest
 from dataclasses import dataclass
-from fountainhead.client_async import Client
+from fountainhead.client_async import AsyncClient
 from fountainhead.server import Server
 
 from .utils import create_test_connection
@@ -16,7 +16,7 @@ from .utils import create_test_connection
 class Environment:
     task_group: anyio.abc.TaskGroup
     server: Server
-    clients: List[Client]
+    clients: List[AsyncClient]
 
 
 @contextlib.asynccontextmanager
@@ -29,7 +29,7 @@ async def create_test_environment(
             server = Server(event_folder, task_group)
             for i in range(nb_clients):
                 first, second = create_test_connection()
-                client = Client(task_group, first, name=f"client_{i}")
+                client = AsyncClient(task_group, first, name=f"client_{i}")
                 await task_group.start(client.process_messages_from_server)
                 task_group.start_soon(server.manage_client_session, second)
                 clients.append(client)

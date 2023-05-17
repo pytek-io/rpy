@@ -1,6 +1,6 @@
 import contextlib
 import websockets
-from msgpack import dumps, loads
+from pickle import dumps, loads
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 
@@ -25,7 +25,7 @@ class Connection:
         await self.websocket.close()
 
     async def wait_closed(self):
-        self.websocket.wait_closed()
+        await self.websocket.wait_closed()
 
 
 @contextlib.asynccontextmanager

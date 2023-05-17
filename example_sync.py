@@ -7,10 +7,10 @@ from fountainhead import create_sync_client
 def main(args):
     with create_sync_client(args.host, args.port, name="producer") as client:
         topic = f"uploads/client_{0}"
-        client.write_event(topic, {"whatever": 1})
+        t = client.write_event(topic, {"whatever": 1})
         return
         start = datetime.datetime.now() - datetime.timedelta(minutes=1)
-        with client.read_events(topic, start.timestamp(), None) as events:
+        with client.read_events(topic, start, None) as events:
             for time_stamp, value in events:
                 print(time_stamp, value)
         client.close()

@@ -1,16 +1,18 @@
 import argparse
-from datetime import datetime
+import inspect
 import logging
 import os
 import signal
 import traceback
-from typing import Dict, Set, Optional, ByteString
+from collections import defaultdict
+from datetime import datetime
+from typing import ByteString, Dict, Optional, Set
 
 import anyio
 import websockets
-from collections import defaultdict
-from .connection import Connection
+
 from .common import print_stack_if_error_and_carry_on
+from .connection import Connection
 
 SUBSCRIPTION_BUFFER_SIZE = 100
 
@@ -19,7 +21,9 @@ class UserException(Exception):
     pass
 
 
-class Client:
+class ClientSessionBase:
+    """Implements non functional specific details"""
+
     def __init__(self, server, name, connection: Connection) -> None:
         self.task_group = None
         self.name = name
@@ -27,8 +31,16 @@ class Client:
         self.running_tasks = {}
         self.server: Server = server
 
+    def __str__(self) -> str:
+        return self.name
+
     async def send(self, *args):
-        await self.connection.send(args)
+        try:
+            await self.connection.send(args)
+        except anyio.get_cancelled_exc_class():
+            raise
+        except:
+            traceback.print_exc()
 
     async def evaluate(self, request_id, coroutine):
         send_termination = True
@@ -38,7 +50,7 @@ class Client:
             send_termination = False
             raise
         except UserException as e:
-            success, result = False, e.args
+            success, result = False, e.args[0]
         except:
             success, result = False, traceback.format_exc()
         if send_termination:
@@ -58,13 +70,15 @@ class Client:
             await self.send(request_id, success, result)
 
     async def cancellable_task_runner(self, request_id, command, details):
-        command_or_stram, method = self.server.commands[command]
         async with anyio.create_task_group() as self.running_tasks[request_id]:
             try:
+                test = getattr(self, command)(request_id, *details)
                 self.running_tasks[request_id].start_soon(
-                    self.evaluate if command_or_stram else self.evaluate_stream,
+                    self.evaluate
+                    if inspect.isawaitable(test)
+                    else self.evaluate_stream,
                     request_id,
-                    method(self, request_id, *details),
+                    test,
                 )
             finally:
                 self.running_tasks.pop(request_id, None)
@@ -86,33 +100,12 @@ class Client:
             self.task_group.start_soon(self.manage_session)
             await self.connection.wait_closed()
             await self.task_group.cancel_scope.cancel()
-            logging.info(f"{self.name} disconnected")
+            logging.info(f"{self} disconnected")
 
 
-class ServerBase:
-    """Implements non functional specific details"""
-
-    def __init__(self, event_folder, task_group) -> None:
-        self.task_group = task_group
-        self.event_folder = event_folder
-        self.commands = {
-            "write_event": (True, self.write_event),
-            "read_event": (True, self.read_event),
-            "read_events": (False, self.read_events),
-        }
-        self.subscriptions: Dict[str, Set] = defaultdict(set)
-
-    async def manage_client_session(self, connection: Connection):
-        (name,) = await connection.recv()
-        logging.info(f"{name} connected")
-        await Client(self, name, connection).run()
-
-    async def manage_client_session_raw(self, raw_websocket):
-        await self.manage_client_session(Connection(raw_websocket))
-
+class ClientSession(ClientSessionBase):
     async def write_event(
         self,
-        client: Client,
         request_id: int,
         topic: str,
         event: ByteString,
@@ -121,35 +114,35 @@ class ServerBase:
     ):
         if topic.startswith("/"):
             topic = topic[1:]
-        folder_path = os.path.join(self.event_folder, topic)
+        folder_path = os.path.join(self.server.event_folder, topic)
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
-        time_stamp = (
-            datetime.now().timestamp()
-            if time_stamp is None
-            else datetime.fromtimestamp(time_stamp)
-        )
-        file_path = os.path.join(folder_path, str(time_stamp))
+        time_stamp = time_stamp or datetime.now()
+        file_path = os.path.join(folder_path, str(time_stamp.timestamp()))
         if os.path.exists(file_path) and not override:
             raise UserException(
                 "Trying to override an existing event without override set to True."
             )
         async with await anyio.open_file(file_path, "wb") as file:
             await file.write(event)
-        logging.info(f"Saved event from {client} under: {file_path}")
-        for request_id, subscription in self.subscriptions[topic]:
+        logging.info(f"Saved event from {self} under: {file_path}")
+        for request_id, subscription in self.server.subscriptions[topic]:
             try:
                 subscription.send_nowait(time_stamp)
             except anyio.WouldBlock:
                 with print_stack_if_error_and_carry_on():
-                    client.running_tasks[request_id].cancel_scope.cancel()
+                    self.running_tasks[request_id].cancel_scope.cancel()
         return time_stamp
 
+    async def read_event(self, _request_id: int, topic: str, time_stamp: datetime):
+        file_path = os.path.join(
+            self.server.event_folder, topic, str(time_stamp.timestamp())
+        )
+        async with await anyio.open_file(file_path, "rb") as file:
+            return await file.read()
 
-class Server(ServerBase):
     async def read_events(
         self,
-        client: Client,
         request_id: int,
         topic: str,
         start: Optional[datetime],
@@ -157,10 +150,10 @@ class Server(ServerBase):
         time_stamps_only: bool,
     ):
         sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
-        subscriptions = self.subscriptions[topic]
+        subscriptions = self.server.subscriptions[topic]
         try:
             subscriptions.add((request_id, sink))
-            folder_path = os.path.join(self.event_folder, topic)
+            folder_path = os.path.join(self.server.event_folder, topic)
             if os.path.exists(folder_path):
                 time_stamps = map(float, os.listdir(folder_path))
                 if start is not None:
@@ -179,39 +172,46 @@ class Server(ServerBase):
                         result.append(
                             (
                                 time_stamp,
-                                await self.read_event(
-                                    self, request_id, topic, time_stamp
-                                ),
+                                await self.read_event(request_id, topic, time_stamp),
                             )
                         )
                 yield result
-            while end is None or datetime.now().timestamp() < end:
+            while end is None or datetime.now() < end:
                 time_stamp = await stream.receive()
                 yield [
                     time_stamp
                     if time_stamps_only
                     else (
                         time_stamp,
-                        await self.read_event(
-                            client, request_id, topic, str(time_stamp)
-                        ),
+                        await self.read_event(request_id, topic, time_stamp),
                     )
                 ]
         finally:
-            sink not in subscriptions or subscriptions.remove(sink)
+            if sink not in subscriptions:
+                subscriptions.remove(sink)
 
-    async def read_event(
-        self, _client: Client, request_id: int, topic: str, time_stamp: float
-    ):
-        file_path = os.path.join(self.event_folder, topic, str(time_stamp))
-        async with await anyio.open_file(file_path, "rb") as file:
-            return await file.read()
+
+class Server:
+    def __init__(self, event_folder, task_group) -> None:
+        self.task_group = task_group
+        self.event_folder = event_folder
+        self.subscriptions: Dict[str, Set] = defaultdict(set)
+
+    async def manage_client_session(self, connection: Connection):
+        (name,) = await connection.recv()
+        logging.info(f"{name} connected")
+        await ClientSession(self, name, connection).run()
+
+    async def manage_client_session_raw(self, raw_websocket):
+        await self.manage_client_session(Connection(raw_websocket))
 
 
 async def serve(folder, port):
     async with anyio.create_task_group() as task_group:
         server = Server(folder, task_group)
-        async with websockets.serve(server.manage_client_session, "localhost", port):
+        async with websockets.serve(
+            server.manage_client_session_raw, "localhost", port
+        ):
             with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
                 async for signum in signals:
                     logging.info(

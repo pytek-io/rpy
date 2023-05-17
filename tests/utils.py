@@ -1,5 +1,5 @@
 import anyio
-from msgpack import dumps, loads
+from pickle import dumps, loads
 from typing import Any, AsyncIterable
 
 
