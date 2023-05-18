@@ -10,7 +10,10 @@ class TestConnection:
         self._closed = anyio.Event()
 
     async def send(self, message):
-        await self.sink.send(dumps(message))
+        try:
+            await self.sink.send(dumps(message))
+        except anyio.get_cancelled_exc_class():
+            print("failed to send", message)
 
     async def recv(self):
         return loads(await self.stream.receive())

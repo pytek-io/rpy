@@ -5,8 +5,13 @@ from typing import Any, Iterator, Optional
 import anyio
 import janus
 
-from .client_async import CLOSE_STREAM, EXCEPTION, OK
-from .client_async import create_async_client
+from .client_async import (
+    CLOSE_STREAM,
+    EXCEPTION,
+    OK,
+    create_async_client,
+    create_context_async_generator,
+)
 
 
 class SyncClientBase:
@@ -18,12 +23,11 @@ class SyncClientBase:
     async def _wrap_async_stream(self, cancellable_stream, *args, **kwargs):
         queue = janus.Queue()
 
-        async def result_sink(value):
-            await queue.async_q.put((OK, value))
-
         async def wrapper():
             try:
-                await cancellable_stream(result_sink, *args, **kwargs)
+                async with cancellable_stream as result_stream:
+                    async for value in result_stream:
+                        await queue.async_q.put((OK, value))
             except anyio.get_cancelled_exc_class():
                 raise
             except Exception as e:
@@ -48,6 +52,9 @@ class SyncClientBase:
             yield result_sync_iterator()
 
     def wrap_async_stream(self, cancellable_stream, *args, **kwargs):
+        cancellable_stream = create_context_async_generator(
+            cancellable_stream, *args, **kwargs
+        )
         return self.portal.wrap_async_context_manager(
             self._wrap_async_stream(cancellable_stream, *args, **kwargs)
         )

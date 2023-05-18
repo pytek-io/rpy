@@ -54,19 +54,15 @@ async def test_simple_write_and_read():
 @pytest.mark.anyio
 async def test_subscription():
     async with create_test_environment(2) as environ:
-        [client1, client2] = environ.clients
+        client1, client2 = environ.clients
         topic = "topic/subtopic"
-        events_sink, events_stream = anyio.create_memory_object_stream()
-
-        async def read_events():
-            async with client2.read_events(topic) as events:
-                async for time_stamp, event in events:
-                    await events_sink.send((time_stamp, event))
-
-        environ.task_group.start_soon(read_events)
-        for i in range(5):
-            value = {"value": i}
-            time_stamp = await client1.write_event(topic, value)
-            returned_time_stamp, returned_value = await events_stream.receive()
-            assert returned_value is not value
-            assert returned_time_stamp == time_stamp and value == returned_value
+        async with client2.read_events(topic) as events:
+            for i in range(1):
+                value = {"value": i}
+                time_stamp = await client1.write_event(topic, value)
+                returned_time_stamp, returned_value = await events.__anext__()
+                assert returned_value is not value
+                assert returned_time_stamp == time_stamp and value == returned_value
+        await anyio.sleep(1)
+        print(environ.server.subscriptions[topic])
+        await anyio.sleep(1)

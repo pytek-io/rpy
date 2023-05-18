@@ -72,13 +72,13 @@ class ClientSessionBase:
     async def cancellable_task_runner(self, request_id, command, details):
         async with anyio.create_task_group() as self.running_tasks[request_id]:
             try:
-                test = getattr(self, command)(request_id, *details)
+                coroutine_or_async_context = getattr(self, command)(request_id, *details)
                 self.running_tasks[request_id].start_soon(
                     self.evaluate
-                    if inspect.isawaitable(test)
+                    if inspect.isawaitable(coroutine_or_async_context)
                     else self.evaluate_stream,
                     request_id,
-                    test,
+                    coroutine_or_async_context,
                 )
             finally:
                 self.running_tasks.pop(request_id, None)
@@ -151,18 +151,25 @@ class ClientSession(ClientSessionBase):
     ):
         sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
         subscriptions = self.server.subscriptions[topic]
+        subscription = (request_id, sink)
         try:
-            subscriptions.add((request_id, sink))
+            subscriptions.add(subscription)
             folder_path = os.path.join(self.server.event_folder, topic)
             if os.path.exists(folder_path):
                 time_stamps = map(float, os.listdir(folder_path))
                 if start is not None:
+                    start_as_time_stamp = start.timestamp()
                     time_stamps = (
-                        time_stamp for time_stamp in time_stamps if time_stamp >= start
+                        time_stamp
+                        for time_stamp in time_stamps
+                        if time_stamp >= start_as_time_stamp
                     )
                 if end is not None:
+                    end_as_time_stamp = end.timestamp()
                     time_stamps = (
-                        time_stamp for time_stamp in time_stamps if time_stamp <= end
+                        time_stamp
+                        for time_stamp in time_stamps
+                        if time_stamp <= end_as_time_stamp
                     )
                 if time_stamps_only:
                     result = time_stamps
@@ -187,9 +194,10 @@ class ClientSession(ClientSessionBase):
                     )
                 ]
         finally:
-            if sink not in subscriptions:
-                subscriptions.remove(sink)
-
+            if subscription in subscriptions:
+                print("removed subscription")
+                subscriptions.remove(subscription)
+                print(self.subscriptions)
 
 class Server:
     def __init__(self, event_folder, task_group) -> None:

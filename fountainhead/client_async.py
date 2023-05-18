@@ -1,17 +1,19 @@
 import contextlib
-from datetime import datetime
+import inspect
 import logging
 import traceback
+from datetime import datetime
 from itertools import count
-from typing import Any, Optional, AsyncIterable
+from pickle import dumps, loads  # could be any arbitrary serialization method
+from typing import Any, AsyncIterable, Optional
 
 import anyio
-from anyio.abc import TaskStatus
 import websockets
-from pickle import dumps, loads  # could be any arbitrary serialization method
+from anyio.abc import TaskStatus
 
 from .common import create_context_async_generator
 from .connection import Connection, wrap_websocket_connection
+from .server import ClientSession
 
 OK = "OK"
 START_TASK = "Start task"
@@ -69,16 +71,18 @@ class AsyncClientBase:
         except websockets.exceptions.ConnectionClosedOK:
             pass
 
-    async def send_command(self, command, args, process_value=None):
+    async def send_command(self, command, args):
         request_id = next(self.request_id)
         sink, stream = anyio.create_memory_object_stream()
         try:
             self.pending_requests[request_id] = sink
+            if not isinstance(command, str):
+                command = command.__name__
             await self.send(request_id, command, args)
             success, result = await stream.receive()
             if not success:
                 raise Exception(result)
-            return process_value(result) if process_value else result
+            return result
         finally:
             self.pending_requests.pop(request_id)
 
@@ -87,6 +91,8 @@ class AsyncClientBase:
         request_sink, request_stream = anyio.create_memory_object_stream(100)
         try:
             self.pending_requests[request_id] = request_sink
+            if not isinstance(command, str):
+                command = command.__name__
             await self.send(request_id, command, args)
             while True:
                 success, values = await request_stream.receive()
@@ -97,8 +103,10 @@ class AsyncClientBase:
                 for value in values:
                     await return_sink(process_value(*value))
         finally:
-            await self.send(request_id, None, None)
-            self.pending_requests.pop(request_id)
+            with anyio.CancelScope(shield=True):
+                await self.send(request_id, None, None)
+                print("client send end of stream")
+                self.pending_requests.pop(request_id)
 
 
 class AsyncClient(AsyncClientBase):
@@ -119,7 +127,7 @@ class AsyncClient(AsyncClientBase):
 
         return create_context_async_generator(
             self.subscribe_stream,
-            "read_events",
+            ClientSession.read_events,
             (topic, start, end, time_stamps_only),
             process_value,
         )
@@ -132,13 +140,13 @@ class AsyncClient(AsyncClientBase):
         override: bool = False,
     ) -> datetime:
         return await self.send_command(
-            "write_event",
+            ClientSession.write_event,
             (topic, self.serializer(event), time_stamp, override),
         )
 
     async def read_event(self, topic: str, time_stamp: datetime):
-        return await self.send_command(
-            "read_event", (topic, time_stamp), self.deserializer
+        return self.deserializer(
+            await self.send_command(ClientSession.read_event, (topic, time_stamp))
         )
 
 

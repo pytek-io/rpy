@@ -1,6 +1,7 @@
 import contextlib
-import websockets
 from pickle import dumps, loads
+
+import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 

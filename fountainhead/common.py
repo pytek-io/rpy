@@ -44,7 +44,7 @@ async def create_context_async_generator(
             await result_sink.aclose()
 
     async with anyio.create_task_group() as task_group:
-        task_group.start_soon(wrapper)
+        task_group.start_soon(wrapper, name="cancellable stream evaluation")
         yield convert_to_async_generator(result_stream.receive)
         task_group.cancel_scope.cancel()
 
