@@ -1,7 +1,9 @@
 import contextlib
-import anyio
-from fountainhead.client_sync import SyncClientBase
 from typing import Iterable
+
+import anyio
+
+from fountainhead.client_sync import SyncClientBase
 
 
 class AsyncClient:

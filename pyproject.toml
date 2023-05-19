@@ -1,3 +1,44 @@
+
+[project]
+name = "fountainhead"
+version = "1.0.0"
+license = {text = "GNU"}
+dynamic = ["readme"]
+
+[tool.setuptools.dynamic]
+readme = {file = ["README.md"]}
+
+[tool.setuptools.packages.find]
+namespaces = false
+where = ["src"]
+include = ["*fountainhead*"]
+
 [tool.black]
-line-length = 88
-target-version = ['py37']
+line-length = 99
+target_version = ["py37"]
+
+[tool.isort]
+line_length = 99
+profile = "black"
+multi_line_output = 3
+lines_after_imports = 2
+default_section = "THIRDPARTY"
+sections = "STDLIB,THIRDPARTY,FIRSTPARTY,LOCALFOLDER"
+
+[tool.mypy]
+install_types = true
+non_interactive = true
+incremental = true
+warn_unused_configs = false
+warn_unused_ignores = true
+check_untyped_defs = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["noos_gateway.data.*.migrations.*"]
+ignore_errors = true
+
+
+[tool.coverage.run]
+source = "fountainhead/*"

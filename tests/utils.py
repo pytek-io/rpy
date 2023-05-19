@@ -1,6 +1,10 @@
 import anyio
 from pickle import dumps, loads
 from typing import Any, AsyncIterable
+import contextlib
+from dataclasses import dataclass
+from typing import AsyncIterable, List
+from fountainhead.client_async import AsyncClient, _create_async_client_core
 
 
 class TestConnection:
@@ -36,3 +40,29 @@ def create_test_connection():
     return TestConnection(first_sink, second_stream), TestConnection(
         second_sink, first_stream
     )
+
+
+@dataclass
+class Environment:
+    task_group: anyio.abc.TaskGroup
+    server: "Server"
+    clients: "List[AsyncClient]"
+
+
+@contextlib.asynccontextmanager
+async def create_test_environment(
+    create_server, create_user_client, nb_clients: int = 1
+) -> AsyncIterable[Environment]:
+    clients = []
+    async with anyio.create_task_group() as task_group:
+        server = create_server(task_group)
+        async with contextlib.AsyncExitStack() as exit_stack:
+            for i in range(nb_clients):
+                first, second = create_test_connection()
+                client = await exit_stack.enter_async_context(
+                    _create_async_client_core(task_group, first, name=f"client_{i}")
+                )
+                task_group.start_soon(server.manage_client_session, second)
+                clients.append(create_user_client(client))
+            yield Environment(task_group, server, clients)
+            task_group.cancel_scope.cancel()

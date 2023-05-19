@@ -11,10 +11,12 @@ from typing import ByteString, Dict, Optional, Set
 import anyio
 import websockets
 
-from .common import print_stack_if_error_and_carry_on
 from .connection import Connection
 
 SUBSCRIPTION_BUFFER_SIZE = 100
+OVERRIDE_ERROR_MESSAGE = (
+    "Trying to override an existing event without override set to True."
+)
 
 
 class UserException(Exception):
@@ -24,8 +26,8 @@ class UserException(Exception):
 class ClientSessionBase:
     """Implements non functional specific details"""
 
-    def __init__(self, server, name, connection: Connection) -> None:
-        self.task_group = None
+    def __init__(self, server, task_group, name, connection: Connection) -> None:
+        self.task_group = task_group
         self.name = name
         self.connection = connection
         self.running_tasks = {}
@@ -70,9 +72,11 @@ class ClientSessionBase:
             await self.send(request_id, success, result)
 
     async def cancellable_task_runner(self, request_id, command, details):
-        async with anyio.create_task_group() as self.running_tasks[request_id]:
-            try:
-                coroutine_or_async_context = getattr(self, command)(request_id, *details)
+        try:
+            async with anyio.create_task_group() as self.running_tasks[request_id]:
+                coroutine_or_async_context = getattr(self, command)(
+                    request_id, *details
+                )
                 self.running_tasks[request_id].start_soon(
                     self.evaluate
                     if inspect.isawaitable(coroutine_or_async_context)
@@ -80,8 +84,8 @@ class ClientSessionBase:
                     request_id,
                     coroutine_or_async_context,
                 )
-            finally:
-                self.running_tasks.pop(request_id, None)
+        finally:
+            self.running_tasks.pop(request_id, None)
 
     async def manage_session(self):
         async for request_id, command, details in self.connection:
@@ -96,7 +100,6 @@ class ClientSessionBase:
                 )
 
     async def run(self):
-        async with anyio.create_task_group() as self.task_group:
             self.task_group.start_soon(self.manage_session)
             await self.connection.wait_closed()
             await self.task_group.cancel_scope.cancel()
@@ -120,9 +123,7 @@ class ClientSession(ClientSessionBase):
         time_stamp = time_stamp or datetime.now()
         file_path = os.path.join(folder_path, str(time_stamp.timestamp()))
         if os.path.exists(file_path) and not override:
-            raise UserException(
-                "Trying to override an existing event without override set to True."
-            )
+            raise UserException(OVERRIDE_ERROR_MESSAGE)
         async with await anyio.open_file(file_path, "wb") as file:
             await file.write(event)
         logging.info(f"Saved event from {self} under: {file_path}")
@@ -130,8 +131,7 @@ class ClientSession(ClientSessionBase):
             try:
                 subscription.send_nowait(time_stamp)
             except anyio.WouldBlock:
-                with print_stack_if_error_and_carry_on():
-                    self.running_tasks[request_id].cancel_scope.cancel()
+                self.running_tasks[request_id].cancel_scope.cancel()
         return time_stamp
 
     async def read_event(self, _request_id: int, topic: str, time_stamp: datetime):
@@ -182,36 +182,44 @@ class ClientSession(ClientSessionBase):
                                 await self.read_event(request_id, topic, time_stamp),
                             )
                         )
-                yield result
+                for value in result:
+                    yield value
             while end is None or datetime.now() < end:
                 time_stamp = await stream.receive()
-                yield [
+                yield (
                     time_stamp
                     if time_stamps_only
                     else (
                         time_stamp,
                         await self.read_event(request_id, topic, time_stamp),
                     )
-                ]
+                )
         finally:
             if subscription in subscriptions:
-                print("removed subscription")
                 subscriptions.remove(subscription)
-                print(self.subscriptions)
 
-class Server:
-    def __init__(self, event_folder, task_group) -> None:
+
+class ServerBase:
+    def __init__(self, task_group) -> None:
         self.task_group = task_group
-        self.event_folder = event_folder
         self.subscriptions: Dict[str, Set] = defaultdict(set)
 
     async def manage_client_session(self, connection: Connection):
         (name,) = await connection.recv()
         logging.info(f"{name} connected")
-        await ClientSession(self, name, connection).run()
+        async with anyio.create_task_group() as task_group:
+            await self.client_session_type(self, task_group, name, connection).run()
 
     async def manage_client_session_raw(self, raw_websocket):
         await self.manage_client_session(Connection(raw_websocket))
+
+
+class Server(ServerBase):
+    client_session_type = ClientSession
+
+    def __init__(self, event_folder, task_group) -> None:
+        super().__init__(task_group)
+        self.event_folder = event_folder
 
 
 async def serve(folder, port):

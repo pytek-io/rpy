@@ -1,6 +1,6 @@
 import contextlib
 from pickle import dumps, loads
-
+from typing import Any
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
@@ -13,7 +13,7 @@ class Connection:
         with contextlib.suppress(ConnectionClosedError, ConnectionClosedOK):
             return await self.websocket.send(dumps(message))
 
-    async def recv(self):
+    async def recv(self) -> Any:
         with contextlib.suppress(ConnectionClosedError, ConnectionClosedOK):
             return loads(await self.websocket.recv())
 
