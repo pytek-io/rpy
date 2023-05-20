@@ -14,17 +14,17 @@ import websockets
 from .connection import Connection
 
 SUBSCRIPTION_BUFFER_SIZE = 100
-OVERRIDE_ERROR_MESSAGE = (
-    "Trying to override an existing event without override set to True."
-)
+OVERRIDE_ERROR_MESSAGE = "Trying to override an existing event without override set to True."
 
 
 class UserException(Exception):
+    """Use this to signal expected errors to users."""
+
     pass
 
 
 class ClientSessionBase:
-    """Implements non functional specific details"""
+    """Implements non functional specific details."""
 
     def __init__(self, server, task_group, name, connection: Connection) -> None:
         self.task_group = task_group
@@ -37,12 +37,7 @@ class ClientSessionBase:
         return self.name
 
     async def send(self, *args):
-        try:
-            await self.connection.send(args)
-        except anyio.get_cancelled_exc_class():
-            raise
-        except:
-            traceback.print_exc()
+        await self.connection.send(args)
 
     async def evaluate(self, request_id, coroutine):
         send_termination = True
@@ -59,14 +54,13 @@ class ClientSessionBase:
             await self.send(request_id, success, result)
 
     async def evaluate_stream(self, request_id, stream):
-        success = True
+        success, result = True, None
         try:
             async for result in stream:
                 await self.send(request_id, True, result)
-            result = None
         except anyio.get_cancelled_exc_class():
             raise
-        except:
+        except Exception:
             success, result = False, traceback.format_exc()
         finally:
             await self.send(request_id, success, result)
@@ -74,9 +68,7 @@ class ClientSessionBase:
     async def cancellable_task_runner(self, request_id, command, details):
         try:
             async with anyio.create_task_group() as self.running_tasks[request_id]:
-                coroutine_or_async_context = getattr(self, command)(
-                    request_id, *details
-                )
+                coroutine_or_async_context = getattr(self, command)(request_id, *details)
                 self.running_tasks[request_id].start_soon(
                     self.evaluate
                     if inspect.isawaitable(coroutine_or_async_context)
@@ -100,10 +92,10 @@ class ClientSessionBase:
                 )
 
     async def run(self):
-            self.task_group.start_soon(self.manage_session)
-            await self.connection.wait_closed()
-            await self.task_group.cancel_scope.cancel()
-            logging.info(f"{self} disconnected")
+        self.task_group.start_soon(self.manage_session)
+        await self.connection.wait_closed()
+        await self.task_group.cancel_scope.cancel()
+        logging.info(f"{self} disconnected")
 
 
 class ClientSession(ClientSessionBase):
@@ -135,9 +127,7 @@ class ClientSession(ClientSessionBase):
         return time_stamp
 
     async def read_event(self, _request_id: int, topic: str, time_stamp: datetime):
-        file_path = os.path.join(
-            self.server.event_folder, topic, str(time_stamp.timestamp())
-        )
+        file_path = os.path.join(self.server.event_folder, topic, str(time_stamp.timestamp()))
         async with await anyio.open_file(file_path, "rb") as file:
             return await file.read()
 
@@ -156,34 +146,21 @@ class ClientSession(ClientSessionBase):
             subscriptions.add(subscription)
             folder_path = os.path.join(self.server.event_folder, topic)
             if os.path.exists(folder_path):
-                time_stamps = map(float, os.listdir(folder_path))
-                if start is not None:
-                    start_as_time_stamp = start.timestamp()
-                    time_stamps = (
+                for time_stamp in map(
+                    lambda s: datetime.fromtimestamp(float(s)), os.listdir(folder_path)
+                ):
+                    if start is not None and time_stamp < start:
+                        continue
+                    if end is not None and time_stamp > end:
+                        continue
+                    yield (
                         time_stamp
-                        for time_stamp in time_stamps
-                        if time_stamp >= start_as_time_stamp
-                    )
-                if end is not None:
-                    end_as_time_stamp = end.timestamp()
-                    time_stamps = (
-                        time_stamp
-                        for time_stamp in time_stamps
-                        if time_stamp <= end_as_time_stamp
-                    )
-                if time_stamps_only:
-                    result = time_stamps
-                else:
-                    result = []
-                    for time_stamp in time_stamps:
-                        result.append(
-                            (
-                                time_stamp,
-                                await self.read_event(request_id, topic, time_stamp),
-                            )
+                        if time_stamps_only
+                        else (
+                            time_stamp,
+                            await self.read_event(request_id, topic, time_stamp),
                         )
-                for value in result:
-                    yield value
+                    )
             while end is None or datetime.now() < end:
                 time_stamp = await stream.receive()
                 yield (
@@ -220,32 +197,3 @@ class Server(ServerBase):
     def __init__(self, event_folder, task_group) -> None:
         super().__init__(task_group)
         self.event_folder = event_folder
-
-
-async def serve(folder, port):
-    async with anyio.create_task_group() as task_group:
-        server = Server(folder, task_group)
-        async with websockets.serve(
-            server.manage_client_session_raw, "localhost", port
-        ):
-            with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
-                async for signum in signals:
-                    logging.info(
-                        "Ctrl+C pressed."
-                        if signum == signal.SIGINT
-                        else "Receieved termination signal."
-                    )
-                    task_group.cancel_scope.cancel()
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    parser = argparse.ArgumentParser(prog="Transactor", description="store events")
-    parser.add_argument(
-        "folder", type=str, help="Stored events location", default="events"
-    )
-    parser.add_argument(
-        "port", type=int, help="tcp port to use", nargs="?", default=8765
-    )
-    args = parser.parse_args()
-    anyio.run(serve, args.folder, args.port)

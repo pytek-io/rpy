@@ -45,12 +45,13 @@ async def test_subscription():
             client1, client2 = environ.clients
             topic = "topic/subtopic"
             async with client2.read_events(topic) as events:
-                for i in range(1):
+                for i in range(10):
                     value = {"value": i}
                     time_stamp = await client1.write_event(topic, value)
                     event_time_stamp, event_value = await asyncstdlib.anext(events)
+                    print(event_value)
                     assert event_time_stamp == time_stamp
                     assert event_value is not value
                     assert value == event_value
-            await anyio.sleep(0) # letting the server do the house keeping
+            await anyio.sleep(0)  # letting the server do the house keeping
             assert not environ.server.subscriptions[topic]

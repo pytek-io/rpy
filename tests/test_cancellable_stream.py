@@ -1,5 +1,6 @@
 import anyio
 import pytest
+from functools import partial
 from fountainhead.common import create_context_async_generator
 
 
@@ -7,7 +8,7 @@ FINALLY_CALLED = "finally called"
 ERROR_MESSAGE = "an error occured"
 
 
-async def cancellable_stream_example(sink, flag):
+async def cancellable_stream(flag, sink):
     try:
         for i in range(10):
             await sink(i)
@@ -20,10 +21,10 @@ async def cancellable_stream_example(sink, flag):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("stop", [2, 100])
+@pytest.mark.parametrize("stop", [2, 11])
 async def test_cancellable_async_generator(stop):
     flag = {FINALLY_CALLED: False}
-    context_async_generator = create_context_async_generator(cancellable_stream_example, flag)
+    context_async_generator = create_context_async_generator(partial(cancellable_stream, flag))
     async with context_async_generator as value_stream:
         async for value in value_stream:
             if value == stop:

@@ -15,7 +15,7 @@ async def write_events(client, topic):
         logging.info(f"Saved {topic} event at {time_stamp}")
 
 
-async def subscribe_to_events(client: AsyncClient, topic):
+async def subscribe_to_events(client: AsyncClient, topic: str):
     start = datetime.now() - timedelta(minutes=100)
     async with client.read_events(topic, start, None) as events:
         async for time_stamp, content in events:

@@ -45,8 +45,8 @@ def create_test_connection():
 @dataclass
 class Environment:
     task_group: anyio.abc.TaskGroup
-    server: "Server"
-    clients: "List[AsyncClient]"
+    server: Any
+    clients: List[Any]
 
 
 @contextlib.asynccontextmanager

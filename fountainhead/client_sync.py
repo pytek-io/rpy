@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 from datetime import datetime
 from typing import Any, Iterator, Optional
@@ -20,7 +21,7 @@ class SyncClientBase:
         self.async_client = async_client
 
     @contextlib.asynccontextmanager
-    async def _wrap_async_stream(self, cancellable_stream, *args, **kwargs):
+    async def _wrap_context_async_stream(self, cancellable_stream, *args, **kwargs):
         queue = janus.Queue()
 
         async def wrapper():
@@ -51,16 +52,15 @@ class SyncClientBase:
             task_group.start_soon(wrapper)
             yield result_sync_iterator()
 
-    def wrap_async_stream(self, cancellable_stream, *args, **kwargs):
-        cancellable_stream = create_context_async_generator(
-            cancellable_stream, *args, **kwargs
-        )
+    def wrap_async_context_stream(self, cancellable_stream):
         return self.portal.wrap_async_context_manager(
-            self._wrap_async_stream(cancellable_stream, *args, **kwargs)
+            self._wrap_context_async_stream(cancellable_stream)
         )
 
-    def wrap_async_call(self, method, *args, **kwargs):
-        return self.portal.call(method, *args, **kwargs)
+    def wrap_awaitable(self, method, *args, **kwargs):
+        return self.portal.call(
+            lambda: method if asyncio.iscoroutine(method) else method, *args, **kwargs
+        )
 
 
 class SyncClient(SyncClientBase):
@@ -71,7 +71,7 @@ class SyncClient(SyncClientBase):
         end: Optional[datetime],
         time_stamps_only: bool = False,
     ):
-        return self.wrap_async_stream(
+        return self.wrap_async_context_stream(
             self.async_client.read_events(topic, start, end, time_stamps_only)
         )
 
@@ -82,13 +82,13 @@ class SyncClient(SyncClientBase):
         time_stamp: Optional[datetime] = None,
         override: bool = False,
     ):
-        return self.wrap_async_call(
-            self.async_client.write_event, topic, event, time_stamp, override
+        return self.wrap_awaitable(
+            self.async_client.write_event(topic, event, time_stamp, override)
         )
 
 
 @contextlib.contextmanager
-def create_sync_client(host_name: str, port: str, name: str) -> Iterator[SyncClient]:
+def create_sync_client(host_name: str, port: int, name: str) -> Iterator[SyncClient]:
     with anyio.start_blocking_portal("asyncio") as portal:
         with portal.wrap_async_context_manager(
             create_async_client(host_name, port, name)

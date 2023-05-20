@@ -3,13 +3,13 @@ import logging
 from datetime import datetime
 from itertools import count
 from pickle import dumps, loads  # could be any arbitrary serialization method
-from typing import Any, AsyncIterable, Optional
+from typing import Any, AsyncIterable, Optional, Callable, Tuple
 
 import anyio
 import websockets
 from anyio.abc import TaskStatus
 
-from .common import create_context_async_generator
+from .common import create_context_async_generator, identity
 from .connection import Connection, wrap_websocket_connection
 from .server import ClientSession
 
@@ -67,27 +67,34 @@ class AsyncClientCore:
         finally:
             self.pending_requests.pop(request_id)
 
-    async def create_stream(self, return_sink, command, args, process_value):
-        request_id = next(self.request_id)
-        request_sink, request_stream = anyio.create_memory_object_stream(STREAM_BUFFER)
-        try:
-            self.pending_requests[request_id] = request_sink
-            await self.send(request_id, command.__name__, args)
-            while True:
-                success, value = await request_stream.receive()
-                if not success:
-                    raise Exception(value)
-                if value is None:
-                    break
-                await return_sink(process_value(*value) if process_value else value)
-        finally:
-            with anyio.CancelScope(shield=True):
-                await self.send(request_id, None, None)
-                self.pending_requests.pop(request_id)
+    def create_cancellable_stream(
+        self, command, args: Tuple[Any, ...], process_value: Optional[Callable]
+    ):
+        process_value = process_value or identity
+
+        async def cancellable_stream(sink: Callable):
+            request_id = next(self.request_id)
+            request_sink, request_stream = anyio.create_memory_object_stream(STREAM_BUFFER)
+            try:
+                self.pending_requests[request_id] = request_sink
+                await self.send(request_id, command.__name__, args)
+                while True:
+                    success, value = await request_stream.receive()
+                    if not success:
+                        raise Exception(value)
+                    if value is None:
+                        break
+                    await sink(process_value(value))
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await self.send(request_id, None, None)
+                    self.pending_requests.pop(request_id)
+
+        return cancellable_stream
 
     def subscribe_stream(self, command, args, process_value=None):
         return create_context_async_generator(
-            self.create_stream, command, args, process_value
+            self.create_cancellable_stream(command, args, process_value)
         )
 
 
@@ -100,10 +107,13 @@ async def _create_async_client_core(
     yield client
 
 
+def load_time_stamp_and_value(time_stamp_and_value):
+    time_stamp, value = time_stamp_and_value
+    return time_stamp, loads(value)
+
+
 class AsyncClient:
-    def __init__(
-        self, client: AsyncClientCore, serializer=None, deserializer=None
-    ) -> None:
+    def __init__(self, client: AsyncClientCore, serializer=None, deserializer=None) -> None:
         self.client = client
         self.serializer = serializer or dumps
         self.deserializer = deserializer or loads
@@ -115,17 +125,10 @@ class AsyncClient:
         end: Optional[datetime] = None,
         time_stamps_only: bool = False,
     ):
-        if time_stamps_only:
-            process_value = None
-        else:
-            process_value = lambda time_stamp, value: (
-                time_stamp,
-                loads(value),
-            )
         return self.client.subscribe_stream(
             ClientSession.read_events,
             (topic, start, end, time_stamps_only),
-            process_value,
+            identity if time_stamps_only else load_time_stamp_and_value,
         )
 
     async def write_event(
@@ -142,9 +145,7 @@ class AsyncClient:
 
     async def read_event(self, topic: str, time_stamp: datetime):
         return self.deserializer(
-            await self.client.send_command(
-                ClientSession.read_event, (topic, time_stamp)
-            )
+            await self.client.send_command(ClientSession.read_event, (topic, time_stamp))
         )
 
 
@@ -157,9 +158,7 @@ async def _create_async_client(
 
 
 @contextlib.asynccontextmanager
-async def create_async_client(
-    host_name: str, port: str, name: str
-) -> AsyncIterable[AsyncClient]:
+async def create_async_client(host_name: str, port: int, name: str) -> AsyncIterable[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with wrap_websocket_connection(host_name, port) as connection:
             async with _create_async_client(task_group, connection, name) as client:
