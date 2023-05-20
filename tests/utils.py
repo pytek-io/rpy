@@ -4,7 +4,7 @@ from typing import Any, AsyncIterable
 import contextlib
 from dataclasses import dataclass
 from typing import AsyncIterable, List
-from fountainhead.client_async import AsyncClient, _create_async_client_core
+from fountainhead.client import AsyncClient, _create_async_client_core
 
 
 class TestConnection:

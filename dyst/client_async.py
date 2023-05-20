@@ -1,8 +1,6 @@
 import contextlib
 import logging
-from datetime import datetime
 from itertools import count
-from pickle import dumps, loads  # could be any arbitrary serialization method
 from typing import Any, AsyncIterable, Optional, Callable, Tuple
 
 import anyio
@@ -10,8 +8,8 @@ import websockets
 from anyio.abc import TaskStatus
 
 from .common import create_context_async_generator, identity
-from .connection import Connection, wrap_websocket_connection
-from .server import ClientSession
+from .connection import Connection
+
 
 OK = "OK"
 START_TASK = "Start task"
@@ -105,61 +103,3 @@ async def _create_async_client_core(
     client = AsyncClientCore(task_group, connection, name=name)
     await task_group.start(client.process_messages_from_server)
     yield client
-
-
-def load_time_stamp_and_value(time_stamp_and_value):
-    time_stamp, value = time_stamp_and_value
-    return time_stamp, loads(value)
-
-
-class AsyncClient:
-    def __init__(self, client: AsyncClientCore, serializer=None, deserializer=None) -> None:
-        self.client = client
-        self.serializer = serializer or dumps
-        self.deserializer = deserializer or loads
-
-    def read_events(
-        self,
-        topic: str,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
-        time_stamps_only: bool = False,
-    ):
-        return self.client.subscribe_stream(
-            ClientSession.read_events,
-            (topic, start, end, time_stamps_only),
-            identity if time_stamps_only else load_time_stamp_and_value,
-        )
-
-    async def write_event(
-        self,
-        topic: str,
-        event: Any,
-        time_stamp: Optional[datetime] = None,
-        override: bool = False,
-    ) -> datetime:
-        return await self.client.send_command(
-            ClientSession.write_event,
-            (topic, self.serializer(event), time_stamp, override),
-        )
-
-    async def read_event(self, topic: str, time_stamp: datetime):
-        return self.deserializer(
-            await self.client.send_command(ClientSession.read_event, (topic, time_stamp))
-        )
-
-
-@contextlib.asynccontextmanager
-async def _create_async_client(
-    task_group, connection: Connection, name: str
-) -> AsyncIterable[AsyncClient]:
-    async with _create_async_client_core(task_group, connection, name) as client:
-        yield AsyncClient(client)
-
-
-@contextlib.asynccontextmanager
-async def create_async_client(host_name: str, port: int, name: str) -> AsyncIterable[AsyncClient]:
-    async with anyio.create_task_group() as task_group:
-        async with wrap_websocket_connection(host_name, port) as connection:
-            async with _create_async_client(task_group, connection, name) as client:
-                yield client

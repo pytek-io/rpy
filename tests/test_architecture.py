@@ -2,7 +2,7 @@ import anyio
 import asyncstdlib
 import pytest
 
-from fountainhead.client_async import AsyncClientCore
+from fountainhead.client import AsyncClientCore
 from fountainhead.server import ClientSessionBase, ServerBase, UserException
 from .utils import create_test_environment
 

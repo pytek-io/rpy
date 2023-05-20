@@ -1,101 +1,14 @@
-import argparse
-import inspect
 import logging
 import os
-import signal
-import traceback
-from collections import defaultdict
 from datetime import datetime
-from typing import ByteString, Dict, Optional, Set
+from typing import ByteString, Optional
 
 import anyio
-import websockets
 
-from .connection import Connection
+from dyst import ServerBase, ClientSessionBase, UserException
 
 SUBSCRIPTION_BUFFER_SIZE = 100
 OVERRIDE_ERROR_MESSAGE = "Trying to override an existing event without override set to True."
-
-
-class UserException(Exception):
-    """Use this to signal expected errors to users."""
-
-    pass
-
-
-class ClientSessionBase:
-    """Implements non functional specific details."""
-
-    def __init__(self, server, task_group, name, connection: Connection) -> None:
-        self.task_group = task_group
-        self.name = name
-        self.connection = connection
-        self.running_tasks = {}
-        self.server: Server = server
-
-    def __str__(self) -> str:
-        return self.name
-
-    async def send(self, *args):
-        await self.connection.send(args)
-
-    async def evaluate(self, request_id, coroutine):
-        send_termination = True
-        try:
-            success, result = True, await coroutine
-        except anyio.get_cancelled_exc_class():
-            send_termination = False
-            raise
-        except UserException as e:
-            success, result = False, e.args[0]
-        except:
-            success, result = False, traceback.format_exc()
-        if send_termination:
-            await self.send(request_id, success, result)
-
-    async def evaluate_stream(self, request_id, stream):
-        success, result = True, None
-        try:
-            async for result in stream:
-                await self.send(request_id, True, result)
-        except anyio.get_cancelled_exc_class():
-            raise
-        except Exception:
-            success, result = False, traceback.format_exc()
-        finally:
-            await self.send(request_id, success, result)
-
-    async def cancellable_task_runner(self, request_id, command, details):
-        try:
-            async with anyio.create_task_group() as self.running_tasks[request_id]:
-                coroutine_or_async_context = getattr(self, command)(request_id, *details)
-                self.running_tasks[request_id].start_soon(
-                    self.evaluate
-                    if inspect.isawaitable(coroutine_or_async_context)
-                    else self.evaluate_stream,
-                    request_id,
-                    coroutine_or_async_context,
-                )
-        finally:
-            self.running_tasks.pop(request_id, None)
-
-    async def manage_session(self):
-        async for request_id, command, details in self.connection:
-            if command is None:
-                task_group = self.running_tasks.get(request_id)
-                logging.info(f"{self.name} cancelling subscription {request_id}")
-                if task_group:
-                    task_group.cancel_scope.cancel()
-            else:
-                self.task_group.start_soon(
-                    self.cancellable_task_runner, request_id, command, details
-                )
-
-    async def run(self):
-        self.task_group.start_soon(self.manage_session)
-        await self.connection.wait_closed()
-        await self.task_group.cancel_scope.cancel()
-        logging.info(f"{self} disconnected")
 
 
 class ClientSession(ClientSessionBase):
@@ -174,21 +87,6 @@ class ClientSession(ClientSessionBase):
         finally:
             if subscription in subscriptions:
                 subscriptions.remove(subscription)
-
-
-class ServerBase:
-    def __init__(self, task_group) -> None:
-        self.task_group = task_group
-        self.subscriptions: Dict[str, Set] = defaultdict(set)
-
-    async def manage_client_session(self, connection: Connection):
-        (name,) = await connection.recv()
-        logging.info(f"{name} connected")
-        async with anyio.create_task_group() as task_group:
-            await self.client_session_type(self, task_group, name, connection).run()
-
-    async def manage_client_session_raw(self, raw_websocket):
-        await self.manage_client_session(Connection(raw_websocket))
 
 
 class Server(ServerBase):

@@ -5,7 +5,7 @@ import anyio
 import pytest
 
 from fountainhead.client_sync import SyncClientBase
-from fountainhead.common import create_context_async_generator
+from dyst import create_context_async_generator
 
 
 class AsyncClient:

@@ -5,7 +5,7 @@ import anyio.abc
 import asyncstdlib
 import pytest
 
-from fountainhead.client_async import AsyncClient
+from fountainhead.client import AsyncClient
 from fountainhead.server import OVERRIDE_ERROR_MESSAGE, Server
 
 from .utils import create_test_environment

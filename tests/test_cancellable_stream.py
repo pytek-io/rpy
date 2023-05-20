@@ -1,7 +1,9 @@
+from functools import partial
+
 import anyio
 import pytest
-from functools import partial
-from fountainhead.common import create_context_async_generator
+
+from dyst import create_context_async_generator
 
 
 FINALLY_CALLED = "finally called"

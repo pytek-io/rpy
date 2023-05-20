@@ -1,5 +1,5 @@
 import contextlib
-from typing import Any, AsyncContextManager, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable
 
 import anyio
 import asyncstdlib
