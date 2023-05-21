@@ -5,7 +5,7 @@ from typing import Any, AsyncIterator, List
 
 import anyio
 import anyio.abc
-from fountainhead.client import AsyncClient, _create_async_client_core
+from fountainhead.client import _create_async_client_core
 
 
 class TestConnection:

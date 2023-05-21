@@ -10,10 +10,10 @@
   ],
   "python.linting.flake8Args": [
     "--max-line-length=120",
-    "--ignore=E402,F841,F401,E302,E305",
+    "--ignore=E402,F841,F401,E302,E305,W503",
   ],
   "python.linting.pydocstyleArgs": [
-    "--ignore=D100,D101,D102,D103,D105,D107,D203",
+    "--ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213,D205",
   ],
   "[python]": {
     "editor.formatOnSave": true,
