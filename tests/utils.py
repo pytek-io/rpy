@@ -1,9 +1,10 @@
-import anyio
-from pickle import dumps, loads
-from typing import Any, AsyncIterable
 import contextlib
 from dataclasses import dataclass
-from typing import AsyncIterable, List
+from pickle import dumps, loads
+from typing import Any, AsyncIterable, List
+
+import anyio
+import anyio.abc
 from fountainhead.client import AsyncClient, _create_async_client_core
 
 
@@ -26,9 +27,10 @@ class TestConnection:
         async for message in self.stream:
             yield loads(message)
 
-    async def close(self):
+    async def aclose(self):
         self.sink.close()
         self.stream.close()
+        await self.wait_closed()
 
     async def wait_closed(self):
         await self._closed.wait()
@@ -37,9 +39,7 @@ class TestConnection:
 def create_test_connection():
     first_sink, first_stream = anyio.create_memory_object_stream(100)
     second_sink, second_stream = anyio.create_memory_object_stream(100)
-    return TestConnection(first_sink, second_stream), TestConnection(
-        second_sink, first_stream
-    )
+    return TestConnection(first_sink, second_stream), TestConnection(second_sink, first_stream)
 
 
 @dataclass

@@ -8,6 +8,7 @@ import anyio
 from fountainhead import create_async_client, AsyncClient
 
 
+
 async def write_events(client, topic):
     while True:
         await anyio.sleep(random.random() * 5)
@@ -33,9 +34,7 @@ async def main_async(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="Client test")
-    parser.add_argument(
-        "host", type=str, help="server host name", nargs="?", default="localhost"
-    )
+    parser.add_argument("host", type=str, help="server host name", nargs="?", default="localhost")
     parser.add_argument("port", type=int, help="tcp port", nargs="?", default=8765)
     args = parser.parse_args()
     anyio.run(main_async, args)

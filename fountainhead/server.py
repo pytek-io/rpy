@@ -1,13 +1,14 @@
 import logging
 import os
 from datetime import datetime
-from typing import ByteString, Optional
+from typing import Optional
 
 import anyio
+import asyncstdlib
 
-from dyst import ServerBase, ClientSessionBase, UserException
+from dyst import ClientSessionBase, ServerBase, UserException
 
-SUBSCRIPTION_BUFFER_SIZE = 100
+
 OVERRIDE_ERROR_MESSAGE = "Trying to override an existing event without override set to True."
 
 
@@ -16,7 +17,7 @@ class ClientSession(ClientSessionBase):
         self,
         request_id: int,
         topic: str,
-        event: ByteString,
+        event: bytes,
         time_stamp: Optional[datetime],
         override: bool,
     ):
@@ -32,11 +33,7 @@ class ClientSession(ClientSessionBase):
         async with await anyio.open_file(file_path, "wb") as file:
             await file.write(event)
         logging.info(f"Saved event from {self} under: {file_path}")
-        for request_id, subscription in self.server.subscriptions[topic]:
-            try:
-                subscription.send_nowait(time_stamp)
-            except anyio.WouldBlock:
-                self.running_tasks[request_id].cancel_scope.cancel()
+        self.broadcast_to_subscrptions(topic, time_stamp)
         return time_stamp
 
     async def read_event(self, _request_id: int, topic: str, time_stamp: datetime):
@@ -52,30 +49,21 @@ class ClientSession(ClientSessionBase):
         end: Optional[datetime],
         time_stamps_only: bool,
     ):
-        sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
-        subscriptions = self.server.subscriptions[topic]
-        subscription = (request_id, sink)
-        try:
-            subscriptions.add(subscription)
+        with self.subscribe(request_id, topic) as subscription:
             folder_path = os.path.join(self.server.event_folder, topic)
+            existing_tags = []
             if os.path.exists(folder_path):
-                for time_stamp in map(
-                    lambda s: datetime.fromtimestamp(float(s)), os.listdir(folder_path)
-                ):
-                    if start is not None and time_stamp < start:
-                        continue
-                    if end is not None and time_stamp > end:
-                        continue
-                    yield (
-                        time_stamp
-                        if time_stamps_only
-                        else (
-                            time_stamp,
-                            await self.read_event(request_id, topic, time_stamp),
-                        )
+                existing_tags = (
+                    time_stamp
+                    for time_stamp in map(
+                        lambda s: datetime.fromtimestamp(float(s)), os.listdir(folder_path)
                     )
-            while end is None or datetime.now() < end:
-                time_stamp = await stream.receive()
+                    if (start is None or time_stamp >= start)
+                    and (end is None or time_stamp <= end)
+                )
+            async for time_stamp in asyncstdlib.chain(existing_tags, subscription):
+                if end and datetime.now() > end:
+                    break
                 yield (
                     time_stamp
                     if time_stamps_only
@@ -84,9 +72,6 @@ class ClientSession(ClientSessionBase):
                         await self.read_event(request_id, topic, time_stamp),
                     )
                 )
-        finally:
-            if subscription in subscriptions:
-                subscriptions.remove(subscription)
 
 
 class Server(ServerBase):

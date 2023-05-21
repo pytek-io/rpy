@@ -1,14 +1,13 @@
 import contextlib
 import logging
 from itertools import count
-from typing import Any, AsyncIterable, Optional, Callable, Tuple
+from typing import Any, AsyncIterable, Callable, Optional, Tuple
 
 import anyio
-import websockets
 from anyio.abc import TaskStatus
 
 from .common import create_context_async_generator, identity
-from .connection import Connection
+from .connection import TCPConnnection
 
 
 OK = "OK"
@@ -40,17 +39,16 @@ class AsyncClientCore:
     ):
         await self.send(self.name)
         task_status.started()
-        with contextlib.suppress(websockets.exceptions.ConnectionClosedOK):
-            while True:
-                message = await self.connection.recv()
-                if message is None:
-                    logging.info("Connection closed by the server.")
-                    self.task_group.cancel_scope.cancel()
-                    break
-                request_id, success, result = message
-                sink = self.pending_requests.get(request_id)
-                if sink:
-                    sink.send_nowait((success, result))
+        while True:
+            message = await self.connection.recv()
+            if message is None:
+                logging.info("Connection closed by the server.")
+                # self.task_group.cancel_scope.cancel()
+                break
+            request_id, success, result = message
+            sink = self.pending_requests.get(request_id)
+            if sink:
+                sink.send_nowait((success, result))
 
     async def send_command(self, command, args):
         request_id = next(self.request_id)
@@ -98,7 +96,7 @@ class AsyncClientCore:
 
 @contextlib.asynccontextmanager
 async def _create_async_client_core(
-    task_group, connection: Connection, name: str
+    task_group, connection: TCPConnnection, name: str
 ) -> AsyncIterable[AsyncClientCore]:
     client = AsyncClientCore(task_group, connection, name=name)
     await task_group.start(client.process_messages_from_server)

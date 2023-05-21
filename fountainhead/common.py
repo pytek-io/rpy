@@ -1,6 +1,5 @@
 import contextlib
-import traceback
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncContextManager, AsyncIterator, Callable
 
 import anyio
 import asyncstdlib
@@ -43,14 +42,3 @@ async def create_context_async_generator(cancellable_stream: Callable) -> AsyncI
 
 def identity(x):
     return x
-
-
-@contextlib.contextmanager
-def print_error_stack(location):
-    try:
-        yield
-    except Exception:
-        traceback.print_exc()
-        print(location)
-        print("=" * 20)
-        raise

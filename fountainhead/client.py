@@ -1,11 +1,17 @@
 import contextlib
 from datetime import datetime
 from pickle import dumps, loads  # could be any arbitrary serialization method
-from typing import Any, AsyncIterable, Optional, Iterator
+from typing import Any, AsyncIterable, Iterator, Optional
 
 import anyio
 
-from dyst import AsyncClientCore, _create_async_client_core, wrap_websocket_connection, SyncClientBase, identity
+from dyst import (
+    AsyncClientCore,
+    SyncClientBase,
+    _create_async_client_core,
+    connect,
+    identity,
+)
 
 from .server import ClientSession
 
@@ -66,9 +72,10 @@ class AsyncClient:
 @contextlib.asynccontextmanager
 async def create_async_client(host_name: str, port: int, name: str) -> AsyncIterable[AsyncClient]:
     async with anyio.create_task_group() as task_group:
-        async with wrap_websocket_connection(host_name, port) as connection:
+        async with connect(host_name, port) as connection:
             async with _create_async_client_core(task_group, connection, name) as client:
                 yield AsyncClient(client)
+
 
 class SyncClient(SyncClientBase):
     def read_events(
