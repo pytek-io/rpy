@@ -12,7 +12,11 @@ from dyst import ClientSessionBase, ServerBase, UserException
 OVERRIDE_ERROR_MESSAGE = "Trying to override an existing event without override set to True."
 
 
-class ClientSession(ClientSessionBase):
+class ClientSession:
+    def __init__(self, server: "Server", session_core: ClientSessionBase) -> None:
+        self.session_core = session_core
+        self.server: "Server" = server
+
     async def write_event(
         self,
         request_id: int,
@@ -33,7 +37,7 @@ class ClientSession(ClientSessionBase):
         async with await anyio.open_file(file_path, "wb") as file:
             await file.write(event)
         logging.info(f"Saved event from {self} under: {file_path}")
-        self.broadcast_to_subscrptions(topic, time_stamp)
+        self.session_core.broadcast_to_subscrptions(topic, time_stamp)
         return time_stamp
 
     async def read_event(self, _request_id: int, topic: str, time_stamp: datetime):
@@ -49,7 +53,7 @@ class ClientSession(ClientSessionBase):
         end: Optional[datetime],
         time_stamps_only: bool,
     ):
-        with self.subscribe(request_id, topic) as subscription:
+        with self.session_core.subscribe(request_id, topic) as subscription:
             folder_path = os.path.join(self.server.event_folder, topic)
             existing_tags = []
             if os.path.exists(folder_path):

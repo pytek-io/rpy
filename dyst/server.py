@@ -31,6 +31,7 @@ class ClientSessionBase:
         self.connection = connection
         self.running_tasks = {}
         self.server: ServerBase = server
+        self.client_methods = {}
 
     def __str__(self) -> str:
         return self.name
@@ -86,7 +87,7 @@ class ClientSessionBase:
     async def cancellable_task_runner(self, request_id, command, details):
         try:
             async with anyio.create_task_group() as self.running_tasks[request_id]:
-                coroutine_or_async_context = getattr(self, command)(request_id, *details)
+                coroutine_or_async_context = self.client_methods[command](request_id, *details)
                 self.running_tasks[request_id].start_soon(
                     self.evaluate_command
                     if inspect.isawaitable(coroutine_or_async_context)
@@ -125,11 +126,13 @@ class ServerBase:
             (client_name,) = await connection.recv()
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                client_session = self.client_session_type(
-                    self, task_group, client_name, connection
+                client_core = ClientSessionBase(self, task_group, client_name, connection)
+                client_session = self.client_session_type(self, client_core)
+                client_core.client_methods.update(
+                    (attr, getattr(client_session, attr)) for attr in dir(client_session)
                 )
-                async with asyncstdlib.closing(client_session):
-                    await client_session.process_messages()
+                async with asyncstdlib.closing(client_core):
+                    await client_core.process_messages()
         except Exception:
             # Catching internal issues here, should never get there.
             traceback.print_exc()
