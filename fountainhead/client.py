@@ -1,7 +1,7 @@
 import contextlib
 from datetime import datetime
 from pickle import dumps, loads  # could be any arbitrary serialization method
-from typing import Any, AsyncIterable, Iterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 import anyio
 
@@ -70,7 +70,7 @@ class AsyncClient:
 
 
 @contextlib.asynccontextmanager
-async def create_async_client(host_name: str, port: int, name: str) -> AsyncIterable[AsyncClient]:
+async def create_async_client(host_name: str, port: int, name: str) -> AsyncIterator[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with connect(host_name, port) as connection:
             async with _create_async_client_core(task_group, connection, name) as client:

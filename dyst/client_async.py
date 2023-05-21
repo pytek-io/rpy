@@ -1,7 +1,7 @@
 import contextlib
 import logging
 from itertools import count
-from typing import Any, AsyncIterable, Callable, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Optional, Tuple
 
 import anyio
 from anyio.abc import TaskStatus
@@ -97,7 +97,7 @@ class AsyncClientCore:
 @contextlib.asynccontextmanager
 async def _create_async_client_core(
     task_group, connection: TCPConnnection, name: str
-) -> AsyncIterable[AsyncClientCore]:
+) -> AsyncIterator[AsyncClientCore]:
     client = AsyncClientCore(task_group, connection, name=name)
     await task_group.start(client.process_messages_from_server)
     yield client

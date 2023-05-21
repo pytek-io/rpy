@@ -1,7 +1,7 @@
 import contextlib
 from dataclasses import dataclass
 from pickle import dumps, loads
-from typing import Any, AsyncIterable, List
+from typing import Any, AsyncIterator, List
 
 import anyio
 import anyio.abc
@@ -23,7 +23,7 @@ class TestConnection:
     async def recv(self):
         return loads(await self.stream.receive())
 
-    async def __aiter__(self) -> AsyncIterable[Any]:
+    async def __aiter__(self) -> AsyncIterator[Any]:
         async for message in self.stream:
             yield loads(message)
 
@@ -52,7 +52,7 @@ class Environment:
 @contextlib.asynccontextmanager
 async def create_test_environment(
     create_server, create_user_client, nb_clients: int = 1
-) -> AsyncIterable[Environment]:
+) -> AsyncIterator[Environment]:
     clients = []
     async with anyio.create_task_group() as task_group:
         server = create_server(task_group)

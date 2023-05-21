@@ -8,7 +8,6 @@ import anyio
 from fountainhead import create_async_client, AsyncClient
 
 
-
 async def write_events(client, topic):
     while True:
         await anyio.sleep(random.random() * 5)

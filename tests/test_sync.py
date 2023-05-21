@@ -1,5 +1,5 @@
 import contextlib
-from typing import AsyncIterable, Iterable
+from typing import AsyncIterator, Iterator
 
 import anyio
 import pytest
@@ -29,12 +29,12 @@ class SyncClient(SyncClientBase):
 
 
 @contextlib.asynccontextmanager
-async def create_async_client() -> AsyncIterable[AsyncClient]:
+async def create_async_client() -> AsyncIterator[AsyncClient]:
     yield AsyncClient()
 
 
 @contextlib.contextmanager
-def create_sync_client() -> Iterable[SyncClient]:
+def create_sync_client() -> Iterator[SyncClient]:
     with anyio.start_blocking_portal("asyncio") as portal:
         with portal.wrap_async_context_manager(create_async_client()) as async_client:
             yield SyncClient(portal, async_client)
