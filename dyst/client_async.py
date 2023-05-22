@@ -6,9 +6,8 @@ from typing import Any, AsyncIterator, Callable, Optional, Tuple
 import anyio
 from anyio.abc import TaskStatus
 
-from .common import create_context_async_generator, identity
-from .connection import TCPConnnection
-
+from .common import create_context_async_generator, identity, anext
+from .abc import Connection
 
 OK = "OK"
 START_TASK = "Start task"
@@ -24,7 +23,7 @@ STREAM_BUFFER = 100
 class AsyncClientCore:
     """Implements non functional specific details."""
 
-    def __init__(self, task_group, connection, name=None) -> None:
+    def __init__(self, task_group, connection: Connection, name=None) -> None:
         self.task_group = task_group
         self.connection = connection
         self.request_id = count()
@@ -40,7 +39,7 @@ class AsyncClientCore:
         await self.send(self.name)
         task_status.started()
         while True:
-            message = await self.connection.recv()
+            message = await anext(self.connection)
             if message is None:
                 logging.info("Connection closed by the server.")
                 # self.task_group.cancel_scope.cancel()
@@ -96,7 +95,7 @@ class AsyncClientCore:
 
 @contextlib.asynccontextmanager
 async def _create_async_client_core(
-    task_group, connection: TCPConnnection, name: str
+    task_group, connection: Connection, name: str
 ) -> AsyncIterator[AsyncClientCore]:
     client = AsyncClientCore(task_group, connection, name=name)
     await task_group.start(client.process_messages_from_server)

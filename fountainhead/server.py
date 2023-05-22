@@ -19,7 +19,6 @@ class ClientSession:
 
     async def write_event(
         self,
-        request_id: int,
         topic: str,
         event: bytes,
         time_stamp: Optional[datetime],
@@ -40,20 +39,19 @@ class ClientSession:
         self.session_core.broadcast_to_subscrptions(topic, time_stamp)
         return time_stamp
 
-    async def read_event(self, _request_id: int, topic: str, time_stamp: datetime):
+    async def read_event(self, topic: str, time_stamp: datetime):
         file_path = os.path.join(self.server.event_folder, topic, str(time_stamp.timestamp()))
         async with await anyio.open_file(file_path, "rb") as file:
             return await file.read()
 
     async def read_events(
         self,
-        request_id: int,
         topic: str,
         start: Optional[datetime],
         end: Optional[datetime],
         time_stamps_only: bool,
     ):
-        with self.session_core.subscribe(request_id, topic) as subscription:
+        with self.session_core.subscribe(topic) as subscription:
             folder_path = os.path.join(self.server.event_folder, topic)
             existing_tags = []
             if os.path.exists(folder_path):
@@ -73,7 +71,7 @@ class ClientSession:
                     if time_stamps_only
                     else (
                         time_stamp,
-                        await self.read_event(request_id, topic, time_stamp),
+                        await self.read_event(topic, time_stamp),
                     )
                 )
 
@@ -82,5 +80,5 @@ class Server(ServerBase):
     client_session_type = ClientSession
 
     def __init__(self, event_folder, task_group) -> None:
-        super().__init__(task_group)
+        super().__init__(ClientSession, task_group)
         self.event_folder = event_folder

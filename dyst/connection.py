@@ -6,12 +6,14 @@ from typing import Any, Tuple
 
 import asyncstdlib
 
+from .abc import Connection
+
 
 FORMAT = "Q"
 SIZE_LENGTH = 8
 
 
-class TCPConnnection:
+class TCPConnection(Connection):
     def __init__(
         self,
         reader: StreamReader,
@@ -45,6 +47,9 @@ class TCPConnnection:
                         raise RuntimeError("Connection closed.")
                 raise
 
+    async def __anext__(self):
+        return await self.recv()
+
     async def __aiter__(self):
         while True:
             try:
@@ -64,6 +69,6 @@ class TCPConnnection:
 @contextlib.asynccontextmanager
 async def connect(host_name: str, port: int, serialize=dumps, deserialize=loads):
     reader, writer = await open_connection(host_name, port)
-    connection = TCPConnnection(reader, writer, True, deserialize, serialize)
+    connection = TCPConnection(reader, writer, True, deserialize, serialize)
     async with asyncstdlib.closing(connection):
         yield connection

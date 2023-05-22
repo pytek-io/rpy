@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import inspect
 import logging
@@ -9,7 +8,9 @@ from typing import Any, Dict, Set
 import anyio
 import asyncstdlib
 
-from dyst import TCPConnnection
+from .abc import Connection
+from .common import anext
+from .connection import TCPConnection
 
 
 SUBSCRIPTION_BUFFER_SIZE = 100
@@ -25,7 +26,7 @@ class UserException(Exception):
 class ClientSessionBase:
     """Implements non functional specific details."""
 
-    def __init__(self, server, task_group, name, connection: TCPConnnection) -> None:
+    def __init__(self, server, task_group, name, connection: Connection) -> None:
         self.task_group = task_group
         self.name = name
         self.connection = connection
@@ -40,23 +41,22 @@ class ClientSessionBase:
         await self.connection.send(args)
 
     @contextlib.contextmanager
-    def subscribe(self, request_id: int, topic: Any):
+    def subscribe(self, topic: Any):
         sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
         subscriptions = self.server.subscriptions[topic]
-        subscription = (request_id, sink)
         try:
-            subscriptions.add(subscription)
+            subscriptions.add(sink)
             yield stream
         finally:
-            if subscription in subscriptions:
-                subscriptions.remove(subscription)
+            if sink in subscriptions:
+                subscriptions.remove(sink)
 
     def broadcast_to_subscrptions(self, topic: Any, message: Any):
-        for request_id, subscription in self.server.subscriptions[topic]:
+        for subscription in self.server.subscriptions[topic]:
             try:
                 subscription.send_nowait(message)
             except anyio.WouldBlock:
-                self.running_tasks[request_id].cancel_scope.cancel()
+                logging.warning("ignoring subscriber which is too far behind")
 
     async def evaluate_command(self, request_id, coroutine):
         send_termination = True
@@ -87,7 +87,7 @@ class ClientSessionBase:
     async def cancellable_task_runner(self, request_id, command, details):
         try:
             async with anyio.create_task_group() as self.running_tasks[request_id]:
-                coroutine_or_async_context = self.client_methods[command](request_id, *details)
+                coroutine_or_async_context = self.client_methods[command](*details)
                 self.running_tasks[request_id].start_soon(
                     self.evaluate_command
                     if inspect.isawaitable(coroutine_or_async_context)
@@ -115,15 +115,15 @@ class ClientSessionBase:
 
 
 class ServerBase:
-    def __init__(self, task_group) -> None:
+    def __init__(self, client_session_type, task_group) -> None:
         self.task_group = task_group
         self.subscriptions: Dict[str, Set] = defaultdict(set)
+        self.client_session_type = client_session_type
 
-    async def on_new_connection(self, reader, writer):
+    async def on_new_connection(self, connection: Connection):
         client_name = "unknown"
-        connection = TCPConnnection(reader, writer, False)
         try:
-            (client_name,) = await connection.recv()
+            (client_name,) = await anext(connection)
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
                 client_core = ClientSessionBase(self, task_group, client_name, connection)
@@ -139,10 +139,5 @@ class ServerBase:
         finally:
             logging.info(f"{client_name} disconnected")
 
-
-async def serve(folder, port):
-    async with anyio.create_task_group() as task_group:
-        server = Server(folder, task_group)
-        tcp_server = await asyncio.start_server(server.on_new_connection, "localhost", port)
-        async with tcp_server:
-            await tcp_server.serve_forever()
+    async def on_new_connection_raw(self, reader, writer):
+        await self.on_new_connection(TCPConnection(reader, writer, False))

@@ -4,7 +4,14 @@ from typing import Any, AsyncIterator, Callable
 
 import anyio
 import asyncstdlib
+import sys
 
+if sys.version_info < (3, 10):
+
+    def anext(async_iterator: AsyncIterator):
+        return async_iterator.__anext__()
+else:
+    anext = anext
 
 async def forward_stream(stream, sink):
     async with asyncstdlib.closing(sink):

@@ -6,9 +6,9 @@ from typing import Any, AsyncIterator, List
 import anyio
 import anyio.abc
 from fountainhead.client import _create_async_client_core
+import dyst.abc
 
-
-class TestConnection:
+class TestConnection(dyst.abc.Connection):
     def __init__(self, sink, stream) -> None:
         self.sink = sink
         self.stream = stream
@@ -21,6 +21,9 @@ class TestConnection:
             print("failed to send", message)
 
     async def recv(self):
+        return await self.__anext__()
+
+    async def __anext__(self):
         return loads(await self.stream.receive())
 
     async def __aiter__(self) -> AsyncIterator[Any]:
@@ -62,7 +65,7 @@ async def create_test_environment(
                 client = await exit_stack.enter_async_context(
                     _create_async_client_core(task_group, first, name=f"client_{i}")
                 )
-                task_group.start_soon(server.manage_client_session, second)
+                task_group.start_soon(server.on_new_connection, second)
                 clients.append(create_user_client(client))
             yield Environment(task_group, server, clients)
             task_group.cancel_scope.cancel()
