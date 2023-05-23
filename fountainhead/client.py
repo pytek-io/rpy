@@ -5,26 +5,9 @@ from typing import Any, AsyncIterator, Iterator, Optional
 
 import anyio
 
-from dyst import (
-    AsyncClientCore,
-    SyncClientBase,
-    _create_async_client_core,
-    connect,
-    identity,
-)
+from dyst import AsyncClientCore, SyncClientBase, _create_async_client_core, connect, identity
 
 from .server import ClientSession
-
-
-OK = "OK"
-START_TASK = "Start task"
-CLOSE_SENTINEL = "Done"
-SHUTDOWN = "Shutdown"
-CLOSE_STREAM = "Close stream"
-CANCEL_TASK = "Cancel task"
-EXCEPTION = "Exception"
-
-STREAM_BUFFER = 100
 
 
 def load_time_stamp_and_value(time_stamp_and_value):
@@ -58,14 +41,14 @@ class AsyncClient:
         time_stamp: Optional[datetime] = None,
         override: bool = False,
     ) -> datetime:
-        return await self.client.send_command(
+        return await self.client.evaluate_command(
             ClientSession.write_event,
             (topic, self.serializer(event), time_stamp, override),
         )
 
     async def read_event(self, topic: str, time_stamp: datetime):
         return self.deserializer(
-            await self.client.send_command(ClientSession.read_event, (topic, time_stamp))
+            await self.client.evaluate_command(ClientSession.read_event, (topic, time_stamp))
         )
 
 

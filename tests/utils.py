@@ -8,6 +8,7 @@ import anyio.abc
 from fountainhead.client import _create_async_client_core
 import dyst.abc
 
+
 class TestConnection(dyst.abc.Connection):
     def __init__(self, sink, stream) -> None:
         self.sink = sink
@@ -18,10 +19,7 @@ class TestConnection(dyst.abc.Connection):
         try:
             await self.sink.send(dumps(message))
         except anyio.get_cancelled_exc_class():
-            print("failed to send", message)
-
-    async def recv(self):
-        return await self.__anext__()
+            print(f"Did not send {message} because of cancellation")
 
     async def __anext__(self):
         return loads(await self.stream.receive())
@@ -65,7 +63,8 @@ async def create_test_environment(
                 client = await exit_stack.enter_async_context(
                     _create_async_client_core(task_group, first, name=f"client_{i}")
                 )
-                task_group.start_soon(server.on_new_connection, second)
+                client_session = await exit_stack.enter_async_context(server.on_new_connection(second))
+                task_group.start_soon(client_session.process_messages)
                 clients.append(create_user_client(client))
             yield Environment(task_group, server, clients)
             task_group.cancel_scope.cancel()

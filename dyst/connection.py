@@ -40,22 +40,17 @@ class TCPConnection(Connection):
             return self.deserialize(
                 await self.reader.readexactly(struct.unpack(FORMAT, length)[0])
             )
-        except IncompleteReadError:
-            if not self._closing:
-                if self.reader.at_eof():
-                    if self.throw_on_eof:
-                        raise RuntimeError("Connection closed.")
-                raise
+        except (IncompleteReadError, ConnectionResetError):
+            if not self._closing and self.reader.at_eof() and self.throw_on_eof:
+                raise RuntimeError("Connection closed.")
+            raise
 
     async def __anext__(self):
         return await self.recv()
 
     async def __aiter__(self):
         while True:
-            try:
-                yield await self.recv()
-            except (IncompleteReadError, ConnectionResetError):
-                break
+            yield await self.recv()
 
     async def aclose(self):
         self._closing = True

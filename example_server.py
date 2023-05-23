@@ -24,7 +24,7 @@ async def serve(folder, port):
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(signal_handler, task_group.cancel_scope)
         server = Server(folder, task_group)
-        tcp_server = await asyncio.start_server(server.on_new_connection, "localhost", port)
+        tcp_server = await asyncio.start_server(server.on_new_connection_raw, "localhost", port)
         async with tcp_server:
             await tcp_server.serve_forever()
 

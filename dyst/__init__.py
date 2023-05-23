@@ -7,6 +7,7 @@ from .client_async import (
     create_context_async_generator,
 )
 from .client_sync import SyncClientBase
-from .common import anext, identity
+from .common import identity
 from .connection import TCPConnection, connect
-from .server import ClientSessionBase, ServerBase, UserException
+from .server import ClientSessionBase, ServerBase
+from .exception import UserException
