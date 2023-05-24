@@ -9,7 +9,7 @@ import pytest
 from fountainhead.client import AsyncClient
 from fountainhead.server import OVERRIDE_ERROR_MESSAGE, Server
 
-from .utils import create_test_environment
+from .utils import create_test_environment, ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS
 
 if sys.version_info < (3, 10):
     from asyncstdlib import anext
@@ -62,5 +62,5 @@ async def test_subscription():
                     assert event_time_stamp == time_stamp
                     assert event_value is not value
                     assert value == event_value
-            await anyio.sleep(0)  # letting the server do the house keeping
+            await anyio.sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
             assert not environ.server.subscriptions[topic]

@@ -72,7 +72,8 @@ class ClientSessionBase:
         except Exception:
             code, result = EXCEPTION, traceback.format_exc()
         finally:
-            await self.send(request_id, code, result)
+            with anyio.CancelScope(shield=True):
+                await self.send(request_id, code, result)
 
     async def cancellable_task_runner(self, request_id, command, details):
         try:

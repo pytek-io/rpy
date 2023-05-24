@@ -4,12 +4,13 @@ from typing import AsyncIterator, Iterator
 import anyio
 import pytest
 
-from dyst import create_context_async_generator, SyncClientBase
+from dyst import SyncClientBase, create_context_async_generator
+from tests.utils import A_LITTLE_BIT_OF_TIME
 
 
 class AsyncClient:
     async def add_numbers(self, a, b):
-        await anyio.sleep(0)
+        await anyio.sleep(A_LITTLE_BIT_OF_TIME)
         return a + b
 
     def async_stream(self, bound):

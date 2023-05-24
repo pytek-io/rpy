@@ -3,7 +3,9 @@ import contextlib
 import anyio
 import pytest
 from asyncstdlib import enumerate
+
 from dyst import create_context_async_generator
+from tests.utils import A_LITTLE_BIT_OF_TIME
 
 
 FINAL_VALUE = "final value"
@@ -16,11 +18,11 @@ def create_cancellable_stream(flag, bound):
         try:
             for i in range(bound):
                 await sink(i)
-                await anyio.sleep(0)
+                await anyio.sleep(A_LITTLE_BIT_OF_TIME)
         finally:
             # rmk: any async clean up action has to be shielded otherwise it will not run (ie: thrown cancel exception)
             with anyio.CancelScope(shield=True):
-                await anyio.sleep(0)
+                await anyio.sleep(A_LITTLE_BIT_OF_TIME)
                 flag[FINAL_VALUE] = i
 
     return cancellable_stream
