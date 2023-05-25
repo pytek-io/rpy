@@ -2,7 +2,6 @@ import contextlib
 from typing import AsyncIterator, Iterator
 
 import anyio
-import pytest
 
 from dyst import SyncClientBase, create_context_async_generator
 from tests.utils import A_LITTLE_BIT_OF_TIME
@@ -39,14 +38,6 @@ def create_sync_client() -> Iterator[SyncClient]:
     with anyio.start_blocking_portal("asyncio") as portal:
         with portal.wrap_async_context_manager(create_async_client()) as async_client:
             yield SyncClient(portal, async_client)
-
-
-@pytest.mark.anyio
-async def test_async():
-    async_client = AsyncClient()
-    async with async_client.async_stream(10) as events:
-        async for event in events:
-            print(event)
 
 
 def test_sync():

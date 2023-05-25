@@ -29,7 +29,7 @@ def create_cancellable_stream(flag, bound):
 
 
 @contextlib.asynccontextmanager
-async def create_cancellable_stream_(nb_iterations, expected_stop_value: int):
+async def create_checked_cancellable_stream(nb_iterations, expected_stop_value: int):
     flag = {FINAL_VALUE: None}
     context_async_generator = create_context_async_generator(
         create_cancellable_stream(flag, nb_iterations)
@@ -48,7 +48,7 @@ async def create_cancellable_stream_(nb_iterations, expected_stop_value: int):
 @pytest.mark.anyio
 async def test_normal_execution():
     bound = 5
-    async with create_cancellable_stream_(bound, bound - 1) as value_stream:
+    async with create_checked_cancellable_stream(bound, bound - 1) as value_stream:
         async for value in value_stream:
             pass
 
@@ -56,7 +56,7 @@ async def test_normal_execution():
 @pytest.mark.anyio
 async def test_early_exit():
     bound, stop = 5, 2
-    async with create_cancellable_stream_(bound, stop + 1) as value_stream:
+    async with create_checked_cancellable_stream(bound, stop) as value_stream:
         async for value in value_stream:
             if value == stop:
                 break
@@ -66,7 +66,7 @@ async def test_early_exit():
 async def test_exception():
     bound, stop = 5, 2
     with pytest.raises(Exception) as e_info:
-        async with create_cancellable_stream_(bound, stop + 1) as value_stream:
+        async with create_checked_cancellable_stream(bound, stop + 1) as value_stream:
             async for value in value_stream:
                 if value == stop:
                     raise Exception(ERROR_MESSAGE)
@@ -80,7 +80,7 @@ async def test_cancellation():
     async with anyio.create_task_group() as task_group:
 
         async def cancellable_task():
-            async with create_cancellable_stream_(bound, stop + 1) as value_stream:
+            async with create_checked_cancellable_stream(bound, stop + 1) as value_stream:
                 async for value in value_stream:
                     if value == stop:
                         task_group.cancel_scope.cancel()

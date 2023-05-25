@@ -1,5 +1,4 @@
 import contextlib
-from dataclasses import dataclass
 from pickle import dumps, loads
 from typing import Any, AsyncIterator, List, Tuple
 
@@ -7,11 +6,12 @@ import anyio
 import anyio.abc
 
 import dyst.abc
+from dyst import AsyncClientCore
 from fountainhead.client import _create_async_client_core
-
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
+ERROR_MESSAGE = "an error occured"
 
 
 class TestConnection(dyst.abc.Connection):
@@ -27,12 +27,11 @@ class TestConnection(dyst.abc.Connection):
         except anyio.get_cancelled_exc_class():
             print(f"Sending {message} was cancelled, {self.name} did not send anything.")
 
-    async def __anext__(self):
+    async def __anext__(self) -> Any:
         return loads(await self.stream.receive())
 
-    async def __aiter__(self) -> AsyncIterator[Any]:
-        async for message in self.stream:
-            yield loads(message)
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self
 
     async def aclose(self):
         self.sink.close()
@@ -53,17 +52,10 @@ def create_test_connection(
     )
 
 
-@dataclass
-class Environment:
-    task_group: anyio.abc.TaskGroup
-    server: Any
-    clients: List[Any]
-
-
 @contextlib.asynccontextmanager
-async def create_test_environment(
-    create_server, create_user_client, nb_clients: int = 1
-) -> AsyncIterator[Environment]:
+async def create_test_environment_core(
+    create_server, nb_clients: int = 1
+) -> AsyncIterator[Tuple[Any, List[AsyncClientCore]]]:
     clients = []
     async with anyio.create_task_group() as task_group:
         server = create_server(task_group)
@@ -74,10 +66,10 @@ async def create_test_environment(
                 client = await exit_stack.enter_async_context(
                     _create_async_client_core(task_group, first, name=client_name)
                 )
-                client_session = await exit_stack.enter_async_context(
+                client_session_core = await exit_stack.enter_async_context(
                     server.on_new_connection(second)
                 )
-                task_group.start_soon(client_session.process_messages)
-                clients.append(create_user_client(client))
-            yield Environment(task_group, server, clients)
+                task_group.start_soon(client_session_core.process_messages)
+                clients.append(client)
+            yield server, clients
             task_group.cancel_scope.cancel()

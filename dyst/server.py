@@ -110,6 +110,14 @@ class ServerBase:
         self.client_session_type = client_session_type
         self.sessions = {}
 
+    @contextlib.contextmanager
+    def register_session(self, client_name, client_session):
+        try:
+            self.sessions[client_name] = client_session
+            yield client_session
+        finally:
+            self.sessions.pop(client_name, None)
+
     @contextlib.asynccontextmanager
     async def on_new_connection(self, connection: Connection):
         client_name = "unknown"
@@ -118,20 +126,22 @@ class ServerBase:
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
                 client_core = ClientSessionBase(self, task_group, client_name, connection)
-                client_session = self.client_session_type(self, client_core)
-                self.sessions[client_name] = client_session
-                client_core.client_methods.update(
-                    (attr, getattr(client_session, attr)) for attr in dir(client_session)
-                )
-                async with asyncstdlib.closing(client_core):
-                    yield client_core
+                with self.register_session(
+                    client_name, self.client_session_type(self, client_core, client_name)
+                ) as client_session:
+                    client_core.client_methods.update(
+                        (attr, getattr(client_session, attr)) for attr in dir(client_session)
+                    )
+                    async with asyncstdlib.closing(client_core):
+                        yield client_core
         except Exception:
             # Catching internal issues here, should never get there.
             traceback.print_exc()
         finally:
-            self.sessions.pop(client_name, None)
             logging.info(f"{client_name} disconnected")
 
     async def on_new_connection_raw(self, reader, writer):
-        async with self.on_new_connection(TCPConnection(reader, writer, False)) as client_core:
+        async with self.on_new_connection(
+            TCPConnection(reader, writer, throw_on_eof=False)
+        ) as client_core:
             await client_core.process_messages()
