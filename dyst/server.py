@@ -14,11 +14,12 @@ from .client_async import CANCELLED_TASK, CLOSE_SENTINEL, EXCEPTION, OK, USER_EX
 from .connection import TCPConnection
 from .exception import UserException
 
+
 if sys.version_info < (3, 10):
     from asyncstdlib import anext
 
 SUBSCRIPTION_BUFFER_SIZE = 100
-OVERRIDE_ERROR_MESSAGE = "Trying to override an existing event without override set to True."
+OVERRIDE_ERROR_MESSAGE = "Trying to overwrite an existing event without overwrite set to True."
 
 
 class ClientSessionBase:
@@ -49,7 +50,7 @@ class ClientSessionBase:
             if sink in subscriptions:
                 subscriptions.remove(sink)
 
-    def broadcast_to_subscrptions(self, topic: Any, message: Any):
+    def broadcast_to_subscriptions(self, topic: Any, message: Any):
         for subscription in self.server.subscriptions[topic]:
             try:
                 subscription.send_nowait(message)
@@ -137,6 +138,7 @@ class ServerBase:
         except Exception:
             # Catching internal issues here, should never get there.
             traceback.print_exc()
+            raise
         finally:
             logging.info(f"{client_name} disconnected")
 

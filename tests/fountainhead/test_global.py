@@ -9,7 +9,8 @@ from typing import AsyncIterator, List, Tuple
 
 
 from fountainhead.client import AsyncClient
-from fountainhead.server import OVERRIDE_ERROR_MESSAGE, Server
+from fountainhead.server import Server
+from dyst.server import OVERRIDE_ERROR_MESSAGE
 
 from tests.utils import create_test_environment_core, ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS
 

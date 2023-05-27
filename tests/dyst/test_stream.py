@@ -11,14 +11,14 @@ import pytest
 from dyst import ClientSessionBase, ServerBase, UserException
 from tests.utils import (
     A_LITTLE_BIT_OF_TIME,
-    ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
     create_test_environment_core,
 )
 
 
 class ClientSession:
-    def __init__(self, server, session_core: ClientSessionBase) -> None:
+    def __init__(self, server, session_core: ClientSessionBase, name: str) -> None:
+        self.name: str = name
         self.session_core = session_core
         self.server = server
         self.running_tasks = 0

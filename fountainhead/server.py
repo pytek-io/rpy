@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional, Any
+from typing import Any, Optional
 
 import anyio
 import asyncstdlib
@@ -63,7 +63,7 @@ class ClientSession:
         time_stamp = time_stamp or datetime.now()
         await self.server.storage.write(topic, str(time_stamp.timestamp()), event, overwrite)
         logging.info(f"Saved event from {self} under: {topic}{time_stamp}")
-        self.session_core.broadcast_to_subscrptions(topic, time_stamp)
+        self.session_core.broadcast_to_subscriptions(topic, time_stamp)
         return time_stamp
 
     async def read_event(self, topic: str, time_stamp: datetime):
@@ -92,6 +92,7 @@ class ClientSession:
 
     def __str__(self) -> str:
         return self.name
+
 
 class Server(ServerBase):
     client_session_type = ClientSession
