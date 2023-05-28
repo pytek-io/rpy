@@ -9,5 +9,5 @@ from .client_async import (
 from .client_sync import SyncClientBase
 from .common import identity
 from .connection import TCPConnection, connect
-from .server import ClientSessionBase, ServerBase
+from .server import ServerBase
 from .exception import UserException

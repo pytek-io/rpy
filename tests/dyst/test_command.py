@@ -1,12 +1,12 @@
 import contextlib
 from functools import partial, wraps
-from typing import AsyncIterator
+from typing import AsyncIterator, Tuple, List
 
 import anyio
 import anyio.abc
 import pytest
 
-from dyst import ClientSessionBase, ServerBase, UserException
+from dyst import ServerBase, UserException
 from tests.utils import (
     A_LITTLE_BIT_OF_TIME,
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
@@ -32,9 +32,9 @@ def update_running_tasks(method):
 
 
 class ClientSession:
-    def __init__(self, server, session_core: ClientSessionBase) -> None:
-        self.session_core = session_core
+    def __init__(self, server, name: str) -> None:
         self.server = server
+        self.name: str = name
         self.running_tasks = 0
         self.ran_tasks = 0
 
@@ -69,6 +69,15 @@ async def create_test_environment():
         clients,
     ):
         yield server, clients
+
+
+@contextlib.asynccontextmanager
+async def create_test_environment_new() -> AsyncIterator[Tuple[ServerBase, List[ClientSession]]]:
+    async with create_test_environment_core(partial(ServerBase, ClientSession)) as (
+        server,
+        clients,
+    ):
+        yield server, [ClientSession(server, name="client_0") for client in clients]
 
 
 @pytest.mark.anyio

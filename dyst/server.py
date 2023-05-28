@@ -25,12 +25,11 @@ OVERRIDE_ERROR_MESSAGE = "Trying to overwrite an existing event without overwrit
 class ClientSessionBase:
     """Implements non functional specific details."""
 
-    def __init__(self, server, task_group, name, connection: Connection) -> None:
+    def __init__(self, task_group, name, connection: Connection) -> None:
         self.task_group = task_group
         self.name = name
         self.connection = connection
         self.running_tasks = {}
-        self.server: ServerBase = server
         self.client_methods = {}
 
     def __str__(self) -> str:
@@ -38,24 +37,6 @@ class ClientSessionBase:
 
     async def send(self, *args: Any):
         await self.connection.send(args)
-
-    @contextlib.contextmanager
-    def subscribe(self, topic: Any):
-        sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
-        subscriptions = self.server.subscriptions[topic]
-        try:
-            subscriptions.add(sink)
-            yield stream
-        finally:
-            if sink in subscriptions:
-                subscriptions.remove(sink)
-
-    def broadcast_to_subscriptions(self, topic: Any, message: Any):
-        for subscription in self.server.subscriptions[topic]:
-            try:
-                subscription.send_nowait(message)
-            except anyio.WouldBlock:
-                logging.warning("ignoring subscriber which is too far behind")
 
     async def cancellable_task(self, request_id, coroutine_or_async_context):
         code, result = CLOSE_SENTINEL, None
@@ -119,6 +100,24 @@ class ServerBase:
         finally:
             self.sessions.pop(client_name, None)
 
+    @contextlib.contextmanager
+    def subscribe(self, topic: Any):
+        sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
+        subscriptions = self.subscriptions[topic]
+        try:
+            subscriptions.add(sink)
+            yield stream
+        finally:
+            if sink in subscriptions:
+                subscriptions.remove(sink)
+
+    def broadcast_to_subscriptions(self, topic: Any, message: Any):
+        for subscription in self.subscriptions[topic]:
+            try:
+                subscription.send_nowait(message)
+            except anyio.WouldBlock:
+                logging.warning("ignoring subscriber which is too far behind")
+
     @contextlib.asynccontextmanager
     async def on_new_connection(self, connection: Connection):
         client_name = "unknown"
@@ -126,9 +125,9 @@ class ServerBase:
             (client_name,) = await anext(connection)
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                client_core = ClientSessionBase(self, task_group, client_name, connection)
+                client_core = ClientSessionBase(task_group, client_name, connection)
                 with self.register_session(
-                    client_name, self.client_session_type(self, client_core, client_name)
+                    client_name, self.client_session_type(self, client_name)
                 ) as client_session:
                     client_core.client_methods.update(
                         (attr, getattr(client_session, attr)) for attr in dir(client_session)

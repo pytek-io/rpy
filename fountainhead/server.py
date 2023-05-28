@@ -6,7 +6,7 @@ from typing import Any, Optional
 import anyio
 import asyncstdlib
 
-from dyst import ClientSessionBase, ServerBase, UserException
+from dyst import ServerBase, UserException
 
 
 overwrite_ERROR_MESSAGE = "Trying to overwrite an existing event without overwrite set to True."
@@ -48,8 +48,7 @@ class Storage:
 
 
 class ClientSession:
-    def __init__(self, server: "Server", session_core: ClientSessionBase, name: str) -> None:
-        self.session_core = session_core
+    def __init__(self, server: "Server", name: str) -> None:
         self.server: "Server" = server
         self.name = name
 
@@ -63,7 +62,7 @@ class ClientSession:
         time_stamp = time_stamp or datetime.now()
         await self.server.storage.write(topic, str(time_stamp.timestamp()), event, overwrite)
         logging.info(f"Saved event from {self} under: {topic}{time_stamp}")
-        self.session_core.broadcast_to_subscriptions(topic, time_stamp)
+        self.server.broadcast_to_subscriptions(topic, time_stamp)
         return time_stamp
 
     async def read_event(self, topic: str, time_stamp: datetime):
@@ -76,7 +75,7 @@ class ClientSession:
         end: Optional[datetime],
         time_stamps_only: bool,
     ):
-        with self.session_core.subscribe(topic) as subscription:
+        with self.server.subscribe(topic) as subscription:
             existing_tags = self.server.storage.list_topic(topic, start, end)
             async for time_stamp in asyncstdlib.chain(existing_tags, subscription):
                 if end and datetime.now() > end:
