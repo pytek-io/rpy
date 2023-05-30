@@ -1,4 +1,6 @@
 import contextlib
+import inspect
+from functools import wraps
 from pickle import dumps, loads
 from typing import Any, AsyncIterator, List, Tuple
 
@@ -7,7 +9,9 @@ import anyio.abc
 
 import dyst.abc
 from dyst import AsyncClientCore
+from dyst.server import ServerBase
 from fountainhead.client import _create_async_client_core
+
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
@@ -36,7 +40,7 @@ class TestConnection(dyst.abc.Connection):
     async def aclose(self):
         self.sink.close()
         self.stream.close()
-        await self.wait_closed()
+        self._closed.set()
 
     async def wait_closed(self):
         await self._closed.wait()
@@ -73,3 +77,29 @@ async def create_test_environment_core(
                 clients.append(client)
             yield server, clients
             task_group.cancel_scope.cancel()
+
+
+@contextlib.asynccontextmanager
+async def create_test_environment(session_type) -> AsyncIterator[Any]:
+    async with create_test_environment_core(ServerBase) as (
+        server,
+        clients,
+    ):
+        async with clients[0].create_remote_object(session_type, (), {}) as proxy:
+            session = server.sessions["client_0"]
+            actual_object = session.objects[proxy.object_id]
+            yield proxy, actual_object
+
+
+def update_running_tasks(method):
+    @wraps(method)
+    async def result(self, *args, **kwargs):
+        try:
+            coroutine_or_async_generator = method(self, *args, **kwargs)
+            if inspect.iscoroutine(coroutine_or_async_generator):
+                return await coroutine_or_async_generator
+            return coroutine_or_async_generator
+        finally:
+            self.ran_tasks += 1
+
+    return result

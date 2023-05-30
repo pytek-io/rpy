@@ -5,6 +5,8 @@ from .client_async import (
     AsyncClientCore,
     _create_async_client_core,
     create_context_async_generator,
+    remote_iter,
+    remote,
 )
 from .client_sync import SyncClientBase
 from .common import identity

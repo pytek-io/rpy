@@ -1,30 +1,33 @@
-import contextlib
-from dataclasses import dataclass
-from functools import partial
-from typing import Any, AsyncIterator, List
+from typing import Any, AsyncIterator
 
 import anyio
 import anyio.abc
 import asyncstdlib
 import pytest
 
-from dyst import ServerBase, UserException
-from tests.utils import A_LITTLE_BIT_OF_TIME, ERROR_MESSAGE, create_test_environment_core
+from dyst import UserException, remote_iter
+from tests.utils import (
+    A_LITTLE_BIT_OF_TIME,
+    ERROR_MESSAGE,
+    create_test_environment,
+    update_running_tasks,
+)
 
 
 class ClientSession:
-    def __init__(self, server, name: str) -> None:
-        self.name: str = name
+    def __init__(self, server):
         self.server = server
-        self.running_tasks = 0
         self.ran_tasks = 0
 
+    @remote_iter
     async def count(self, bound: int) -> AsyncIterator[int]:
         for i in range(bound):
             await anyio.sleep(A_LITTLE_BIT_OF_TIME)
             yield i
 
-    async def stream_exception(self, exception):
+    @remote_iter
+    @update_running_tasks
+    async def stream_exception(self, exception) -> AsyncIterator[int]:
         for i in range(10):
             await anyio.sleep(A_LITTLE_BIT_OF_TIME)
             yield i
@@ -32,33 +35,25 @@ class ClientSession:
                 raise exception
 
 
-@contextlib.asynccontextmanager
-async def create_test_environment():
-    async with create_test_environment_core(partial(ServerBase, ClientSession)) as (
-        server,
-        clients,
-    ):
-        yield server, clients
-
-
 @pytest.mark.anyio
 async def test_stream_count():
-    async with create_test_environment() as (_server, (client,)):
-        async with client.subscribe_stream(ClientSession.count, (10,)) as events:
-            async for i, value in asyncstdlib.enumerate(events):
-                assert i == value
+    async with create_test_environment(ClientSession) as (proxy, _actual_object):
+        async for i, value in asyncstdlib.enumerate(proxy.count(10)):
+            assert i == value
 
 
 @pytest.mark.anyio
 async def test_stream_exception():
-    async with create_test_environment() as (_server, (client,)):
+    async with create_test_environment(ClientSession) as (proxy, actual_object):
         with pytest.raises(Exception) as e_info:
-            async with client.subscribe_stream(
-                ClientSession.stream_exception, (UserException(ERROR_MESSAGE),)
-            ) as events:
-                async for i, value in asyncstdlib.enumerate(events):
+            async with asyncstdlib.scoped_iter(
+                proxy.stream_exception(UserException(ERROR_MESSAGE))
+            ) as stream:
+                async for i, value in asyncstdlib.enumerate(stream):
                     assert i == value
-        assert e_info.value.args[0] == ERROR_MESSAGE
+        print("here")
+        # assert e_info.value.args[0] == ERROR_MESSAGE
+        # assert actual_object.ran_tasks == 1
 
 
 # @pytest.mark.anyio

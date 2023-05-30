@@ -4,13 +4,23 @@ import logging
 import sys
 import traceback
 from collections import defaultdict
-from typing import Any, Dict, Set
+from typing import Any, Dict, Set, Tuple
+import asyncstdlib
+
 
 import anyio
 import asyncstdlib
-
 from .abc import Connection
-from .client_async import CANCELLED_TASK, CLOSE_SENTINEL, EXCEPTION, OK, USER_EXCEPTION
+from .client_async import (
+    CANCELLED_TASK,
+    CLOSE_SENTINEL,
+    EXCEPTION,
+    OK,
+    USER_EXCEPTION,
+    COMMAND,
+    CREATE_OBJECT,
+    RESULT,
+)
 from .connection import TCPConnection
 from .exception import UserException
 
@@ -22,21 +32,20 @@ SUBSCRIPTION_BUFFER_SIZE = 100
 OVERRIDE_ERROR_MESSAGE = "Trying to overwrite an existing event without overwrite set to True."
 
 
-class ClientSessionBase:
-    """Implements non functional specific details."""
-
-    def __init__(self, task_group, name, connection: Connection) -> None:
+class ConnectionSession:
+    def __init__(self, server, task_group, name, connection: Connection) -> None:
+        self.server = server
         self.task_group = task_group
         self.name = name
         self.connection = connection
         self.running_tasks = {}
-        self.client_methods = {}
+        self.objects = {}
 
     def __str__(self) -> str:
         return self.name
 
-    async def send(self, *args: Any):
-        await self.connection.send(args)
+    async def send(self, code: str, args: Tuple[Any, ...]):
+        await self.connection.send((code, args))
 
     async def cancellable_task(self, request_id, coroutine_or_async_context):
         code, result = CLOSE_SENTINEL, None
@@ -44,8 +53,9 @@ class ClientSessionBase:
             if inspect.isawaitable(coroutine_or_async_context):
                 code, result = OK, await coroutine_or_async_context
             else:
-                async for result in coroutine_or_async_context:
-                    await self.send(request_id, OK, result)
+                async with asyncstdlib.scoped_iter(coroutine_or_async_context) as aiter:
+                    async for value in aiter:
+                        await self.send(RESULT, (request_id, OK, value))
         except anyio.get_cancelled_exc_class():
             code = CANCELLED_TASK
             raise
@@ -55,12 +65,15 @@ class ClientSessionBase:
             code, result = EXCEPTION, traceback.format_exc()
         finally:
             with anyio.CancelScope(shield=True):
-                await self.send(request_id, code, result)
+                await self.send(RESULT, (request_id, code, result))
 
-    async def cancellable_task_runner(self, request_id, command, details):
+    async def cancellable_task_runner(self, request_id, attr, *args):
         try:
+            if callable(attr):
+                coroutine_or_async_context = attr(*args)
+            else:
+                coroutine_or_async_context = attr
             async with anyio.create_task_group() as self.running_tasks[request_id]:
-                coroutine_or_async_context = self.client_methods[command](*details)
                 self.running_tasks[request_id].start_soon(
                     self.cancellable_task,
                     request_id,
@@ -69,27 +82,47 @@ class ClientSessionBase:
         finally:
             self.running_tasks.pop(request_id, None)
 
+    async def create_object(self, object_id, object_class, args, kwarg):
+        code, message = OK, None
+        if object_class:
+            try:
+                self.objects[object_id] = object_class(self.server, *args, **kwarg)
+            except Exception:
+                code, message = EXCEPTION, traceback.format_exc()
+            await self.send(CREATE_OBJECT, (object_id, code, message))
+        else:
+            self.objects.pop(object_id, None)
+
     async def process_messages(self):
-        async for request_id, command, details in self.connection:
-            if command is None:
-                request_task_group = self.running_tasks.get(request_id)
-                logging.info(f"{self.name} cancelling subscription {request_id}")
-                if request_task_group:
-                    request_task_group.cancel_scope.cancel()
+        async for code, payload in self.connection:
+            if code == COMMAND:
+                object_id, request_id, command, args = payload
+                if command is None:
+                    request_task_group = self.running_tasks.get(request_id)
+                    if request_task_group:
+                        logging.info(f"{self.name} cancelling subscription {request_id}")
+                        request_task_group.cancel_scope.cancel()
+                else:
+                    attr = getattr(self.objects[object_id], command)
+                    self.task_group.start_soon(
+                        self.cancellable_task_runner,
+                        request_id,
+                        attr,
+                        *args,
+                    )
+            elif code == CREATE_OBJECT:
+                await self.create_object(*payload)
             else:
-                self.task_group.start_soon(
-                    self.cancellable_task_runner, request_id, command, details
-                )
+                raise Exception(f"Unknown code {code} with payload {payload}")
 
     async def aclose(self):
         self.task_group.cancel_scope.cancel()
 
 
 class ServerBase:
-    def __init__(self, client_session_type, task_group) -> None:
+    def __init__(self, task_group) -> None:
         self.task_group = task_group
         self.subscriptions: Dict[str, Set] = defaultdict(set)
-        self.client_session_type = client_session_type
         self.sessions = {}
 
     @contextlib.contextmanager
@@ -125,15 +158,10 @@ class ServerBase:
             (client_name,) = await anext(connection)
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                client_core = ClientSessionBase(task_group, client_name, connection)
-                with self.register_session(
-                    client_name, self.client_session_type(self, client_name)
-                ) as client_session:
-                    client_core.client_methods.update(
-                        (attr, getattr(client_session, attr)) for attr in dir(client_session)
-                    )
-                    async with asyncstdlib.closing(client_core):
-                        yield client_core
+                connection_session = ConnectionSession(self, task_group, client_name, connection)
+                with self.register_session(client_name, connection_session):
+                    async with asyncstdlib.closing(connection_session):
+                        yield connection_session
         except Exception:
             # Catching internal issues here, should never get there.
             traceback.print_exc()

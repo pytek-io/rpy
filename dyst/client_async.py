@@ -1,8 +1,10 @@
+import asyncio
 import contextlib
-import logging
+import inspect
 import sys
+from functools import partial
 from itertools import count
-from typing import Any, AsyncIterator, Callable, Optional, Tuple
+from typing import Any, AsyncIterator
 
 import anyio
 from anyio.abc import TaskStatus
@@ -10,6 +12,7 @@ from anyio.abc import TaskStatus
 from .abc import Connection
 from .common import create_context_async_generator, identity
 from .exception import UserException
+
 
 if sys.version_info < (3, 10):
     from asyncstdlib import anext
@@ -23,8 +26,20 @@ CANCEL_TASK = "Cancel task"
 CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
 USER_EXCEPTION = "UserException"
-
+COMMAND = "Command"
+CREATE_OBJECT = "Create object"
 STREAM_BUFFER = 100
+RESULT = "Result"
+
+
+def remote_iter(method):
+    method.__name__ += "@remote_iter"
+    return method
+
+
+def remote(method):
+    method.__name__ += "@remote"
+    return method
 
 
 class AsyncClientCore:
@@ -36,6 +51,8 @@ class AsyncClientCore:
         self.request_id = count()
         self.pending_requests = {}
         self.name = name
+        self.object_counter = count()
+        self.pending_objects = {}
 
     async def send(self, *args):
         await self.connection.send(args)
@@ -45,33 +62,61 @@ class AsyncClientCore:
     ):
         await self.send(self.name)
         task_status.started()
-        while True:
-            message = await anext(self.connection)
-            if message is None:
-                logging.info("Connection closed by the server.")
-                break
-            request_id, code, result = message
-            sink = self.pending_requests.get(request_id)
-            if sink:
-                sink.send_nowait((code, result))
+        async for code, message in self.connection:
+            if code == RESULT:
+                request_id, code, result = message
+                sink = self.pending_requests.get(request_id)
+                if sink:
+                    sink.send_nowait((code, result))
+            elif code == CREATE_OBJECT:
+                object_id, code, message = message
+                self.pending_objects.pop(object_id).set_result((code, message))
 
     @contextlib.asynccontextmanager
-    async def manage_request(self, command, args, buffer_size=1):
+    async def create_remote_object(self, object_class, args, kwarg):
+        object_id = next(self.object_counter)
+        self.pending_objects[object_id] = asyncio.Future()
+        try:
+            await self.send(CREATE_OBJECT, (object_id, object_class, args, kwarg))
+            code, details = await self.pending_objects[object_id]
+            if code != OK:
+                raise Exception(details)
+            remote_object = object_class.__new__(object_class)
+            remote_object.client = self
+            remote_object.object_id = object_id
+            for name, attr in ((name, getattr(object_class, name)) for name in dir(object_class)):
+                if inspect.isfunction(attr):
+                    if attr.__name__.endswith("@remote"):
+                        setattr(remote_object, name, partial(self.evaluate_command, object_id, name))
+                    elif attr.__name__.endswith("@remote_iter"):
+                        setattr(
+                            remote_object,
+                            name,
+                            partial(self.create_cancellable_stream, object_id, name),
+                        )
+            yield remote_object
+        finally:
+            await self.send(CREATE_OBJECT, (object_id, None, None, None))
+
+    @contextlib.asynccontextmanager
+    async def manage_request(self, object_id, command, args, buffer_size=1):
         sink, stream = anyio.create_memory_object_stream(buffer_size)
         request_id = next(self.request_id)
         self.pending_requests[request_id] = sink
-        await self.send(request_id, command.__name__, args)
+        # FIXME: rrmove this
+        command = command.__name__ if callable(command) else command
+        await self.send(COMMAND, (object_id, request_id, command, args))
         try:
             yield stream
         except anyio.get_cancelled_exc_class():
             with anyio.CancelScope(shield=True):
-                await self.send(request_id, None, None)
+                await self.send(COMMAND, (object_id, request_id, None, None))
             raise
         finally:
             self.pending_requests.pop(request_id)
 
-    async def evaluate_command(self, command: Any, args: Tuple[Any, ...]):
-        async with self.manage_request(command, args) as stream:
+    async def evaluate_command(self, object_id, command: Any, *args, **kwargs):
+        async with self.manage_request(object_id, command, args) as stream:
             code, result = await stream.receive()
             if code == OK:
                 return result
@@ -81,27 +126,19 @@ class AsyncClientCore:
                 raise UserException(result)
             raise Exception(result)
 
-    def create_cancellable_stream(
-        self, command, args: Tuple[Any, ...], process_value: Optional[Callable]
-    ):
-        process_value = process_value or identity
-
-        async def cancellable_stream(sink: Callable):
-            async with self.manage_request(command, args, STREAM_BUFFER) as stream:
-                async for code, value in stream:
-                    if code == OK:
-                        await sink(process_value(value))
-                    elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
-                        break
-                    else:
-                        raise Exception(value)
-
-        return cancellable_stream
-
-    def subscribe_stream(self, command, args, process_value=None):
-        return create_context_async_generator(
-            self.create_cancellable_stream(command, args, process_value)
-        )
+    async def create_cancellable_stream(self, object_id, command, *args, **kwargs):
+        request = self.manage_request(object_id, command, args, STREAM_BUFFER)
+        try:
+            async for code, value in await request.__aenter__():
+                if code == OK:
+                    yield value
+                elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
+                    break
+                else:
+                    raise Exception(value)
+        finally:
+            print("finally")
+            await request.__aexit__(None, None, None)
 
 
 @contextlib.asynccontextmanager

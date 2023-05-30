@@ -48,9 +48,8 @@ class Storage:
 
 
 class ClientSession:
-    def __init__(self, server: "Server", name: str) -> None:
+    def __init__(self, server: "Server") -> None:
         self.server: "Server" = server
-        self.name = name
 
     async def write_event(
         self,
@@ -88,9 +87,6 @@ class ClientSession:
                         await self.read_event(topic, time_stamp),
                     )
                 )
-
-    def __str__(self) -> str:
-        return self.name
 
 
 class Server(ServerBase):
