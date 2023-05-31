@@ -1,5 +1,4 @@
 import contextlib
-import inspect
 import logging
 import sys
 import traceback
@@ -20,6 +19,7 @@ from .client_async import (
     COMMAND,
     CREATE_OBJECT,
     RESULT,
+    GET_ATTRIBUTE,
 )
 from .connection import TCPConnection
 from .exception import UserException
@@ -32,7 +32,7 @@ SUBSCRIPTION_BUFFER_SIZE = 100
 OVERRIDE_ERROR_MESSAGE = "Trying to overwrite an existing event without overwrite set to True."
 
 
-class ConnectionSession:
+class ClientSession:
     def __init__(self, server, task_group, name, connection: Connection) -> None:
         self.server = server
         self.task_group = task_group
@@ -47,15 +47,16 @@ class ConnectionSession:
     async def send(self, code: str, args: Tuple[Any, ...]):
         await self.connection.send((code, args))
 
-    async def cancellable_task(self, request_id, coroutine_or_async_context):
+    async def cancellable_task(self, request_id, is_generator, coroutine_or_async_context):
         code, result = CLOSE_SENTINEL, None
         try:
-            if inspect.isawaitable(coroutine_or_async_context):
-                code, result = OK, await coroutine_or_async_context
-            else:
+            if is_generator:
                 async with asyncstdlib.scoped_iter(coroutine_or_async_context) as aiter:
                     async for value in aiter:
                         await self.send(RESULT, (request_id, OK, value))
+            else:
+                code, result = OK, await coroutine_or_async_context
+
         except anyio.get_cancelled_exc_class():
             code = CANCELLED_TASK
             raise
@@ -67,7 +68,7 @@ class ConnectionSession:
             with anyio.CancelScope(shield=True):
                 await self.send(RESULT, (request_id, code, result))
 
-    async def cancellable_task_runner(self, request_id, attr, *args):
+    async def cancellable_task_runner(self, request_id, is_generator, attr, *args):
         try:
             if callable(attr):
                 coroutine_or_async_context = attr(*args)
@@ -77,6 +78,7 @@ class ConnectionSession:
                 self.running_tasks[request_id].start_soon(
                     self.cancellable_task,
                     request_id,
+                    is_generator,
                     coroutine_or_async_context,
                 )
         finally:
@@ -96,20 +98,24 @@ class ConnectionSession:
     async def process_messages(self):
         async for code, payload in self.connection:
             if code == COMMAND:
-                object_id, request_id, command, args = payload
+                object_id, request_id, command, is_generator, args = payload
                 if command is None:
-                    request_task_group = self.running_tasks.get(request_id)
-                    if request_task_group:
-                        logging.info(f"{self.name} cancelling subscription {request_id}")
-                        request_task_group.cancel_scope.cancel()
-                else:
                     attr = getattr(self.objects[object_id], command)
                     self.task_group.start_soon(
                         self.cancellable_task_runner,
                         request_id,
+                        is_generator,
                         attr,
                         *args,
                     )
+                else:
+                    request_task_group = self.running_tasks.get(request_id)
+                    if request_task_group:
+                        logging.info(f"{self.name} cancelling subscription {request_id}")
+                        request_task_group.cancel_scope.cancel()
+            elif code == GET_ATTRIBUTE:
+                object_id, request_id, name = payload
+                await self.send(RESULT, (request_id, OK, getattr(self.objects[object_id], name)))
             elif code == CREATE_OBJECT:
                 await self.create_object(*payload)
             else:
@@ -158,10 +164,12 @@ class ServerBase:
             (client_name,) = await anext(connection)
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                connection_session = ConnectionSession(self, task_group, client_name, connection)
+                connection_session = ClientSession(self, task_group, client_name, connection)
                 with self.register_session(client_name, connection_session):
                     async with asyncstdlib.closing(connection_session):
                         yield connection_session
+        except anyio.get_cancelled_exc_class():
+            raise
         except Exception:
             # Catching internal issues here, should never get there.
             traceback.print_exc()

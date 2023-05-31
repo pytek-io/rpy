@@ -12,7 +12,7 @@ from tests.utils import (
 )
 
 
-class ClientSession:
+class RemoteObject:
     def __init__(self, server) -> None:
         self.server = server
         self.ran_tasks = 0
@@ -33,8 +33,14 @@ class ClientSession:
 
 
 @pytest.mark.anyio
+async def test_attribute():
+    async with create_test_environment(RemoteObject) as (proxy, _actual_object):
+        assert 0 == await proxy.ran_tasks
+
+
+@pytest.mark.anyio
 async def test_command_echo():
-    async with create_test_environment(ClientSession) as (proxy, _actual_object):
+    async with create_test_environment(RemoteObject) as (proxy, _actual_object):
         value = "test"
         returned_value = await proxy.echo(value)
         assert returned_value is not value
@@ -43,7 +49,7 @@ async def test_command_echo():
 
 @pytest.mark.anyio
 async def test_command_exception():
-    async with create_test_environment(ClientSession) as (proxy, _actual_object):
+    async with create_test_environment(RemoteObject) as (proxy, _actual_object):
         with pytest.raises(UserException) as e_info:
             await proxy.throw_exception(UserException(ERROR_MESSAGE))
         assert e_info.value.args[0] == ERROR_MESSAGE
@@ -51,7 +57,7 @@ async def test_command_exception():
 
 @pytest.mark.anyio
 async def test_command_cancellation():
-    async with create_test_environment(ClientSession) as (proxy, actual_object):
+    async with create_test_environment(RemoteObject) as (proxy, actual_object):
         async with anyio.create_task_group() as task_group:
 
             async def cancellable_task(task_status: anyio.abc.TaskStatus):
@@ -67,7 +73,7 @@ async def test_command_cancellation():
 
 @pytest.mark.anyio
 async def test_command_time_out():
-    async with create_test_environment(ClientSession) as (proxy, actual_object):
+    async with create_test_environment(RemoteObject) as (proxy, actual_object):
         async with anyio.create_task_group():
             with anyio.move_on_after(1):
                 await proxy.sleep_forever()

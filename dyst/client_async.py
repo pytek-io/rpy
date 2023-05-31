@@ -28,8 +28,11 @@ EXCEPTION = "Exception"
 USER_EXCEPTION = "UserException"
 COMMAND = "Command"
 CREATE_OBJECT = "Create object"
+GET_ATTRIBUTE = "Get attribute"
 STREAM_BUFFER = 100
 RESULT = "Result"
+IS_GENERATOR = True
+IS_COROUTINE = False
 
 
 def remote_iter(method):
@@ -40,6 +43,15 @@ def remote_iter(method):
 def remote(method):
     method.__name__ += "@remote"
     return method
+
+
+async def fetch_attribute(self, name):
+    request_id = next(self.client.request_id)
+    sink, stream = anyio.create_memory_object_stream()
+    self.client.pending_requests[request_id] = sink
+    await self.client.send(GET_ATTRIBUTE, (self.object_id, request_id, name))
+    code, value = await stream.receive()
+    return value
 
 
 class AsyncClientCore:
@@ -81,13 +93,18 @@ class AsyncClientCore:
             code, details = await self.pending_objects[object_id]
             if code != OK:
                 raise Exception(details)
+            object_class = type(
+                object_class.__name__, (object_class,), {"__getattr__": fetch_attribute}
+            )
             remote_object = object_class.__new__(object_class)
             remote_object.client = self
             remote_object.object_id = object_id
             for name, attr in ((name, getattr(object_class, name)) for name in dir(object_class)):
                 if inspect.isfunction(attr):
                     if attr.__name__.endswith("@remote"):
-                        setattr(remote_object, name, partial(self.evaluate_command, object_id, name))
+                        setattr(
+                            remote_object, name, partial(self.evaluate_command, object_id, name)
+                        )
                     elif attr.__name__.endswith("@remote_iter"):
                         setattr(
                             remote_object,
@@ -99,24 +116,20 @@ class AsyncClientCore:
             await self.send(CREATE_OBJECT, (object_id, None, None, None))
 
     @contextlib.asynccontextmanager
-    async def manage_request(self, object_id, command, args, buffer_size=1):
+    async def manage_request(self, object_id, command, is_generator, args, buffer_size=1):
         sink, stream = anyio.create_memory_object_stream(buffer_size)
         request_id = next(self.request_id)
         self.pending_requests[request_id] = sink
-        # FIXME: rrmove this
-        command = command.__name__ if callable(command) else command
-        await self.send(COMMAND, (object_id, request_id, command, args))
+        await self.send(COMMAND, (object_id, request_id, command, is_generator, args))
         try:
             yield stream
-        except anyio.get_cancelled_exc_class():
-            with anyio.CancelScope(shield=True):
-                await self.send(COMMAND, (object_id, request_id, None, None))
-            raise
         finally:
-            self.pending_requests.pop(request_id)
+            with anyio.CancelScope(shield=True):
+                await self.send(COMMAND, (object_id, request_id, None, None, None))
+            self.pending_requests.pop(request_id, None)
 
     async def evaluate_command(self, object_id, command: Any, *args, **kwargs):
-        async with self.manage_request(object_id, command, args) as stream:
+        async with self.manage_request(object_id, command, IS_COROUTINE, args) as stream:
             code, result = await stream.receive()
             if code == OK:
                 return result
@@ -127,9 +140,10 @@ class AsyncClientCore:
             raise Exception(result)
 
     async def create_cancellable_stream(self, object_id, command, *args, **kwargs):
-        request = self.manage_request(object_id, command, args, STREAM_BUFFER)
+        request = self.manage_request(object_id, command, IS_GENERATOR, args, STREAM_BUFFER)
         try:
-            async for code, value in await request.__aenter__():
+            stream = await request.__aenter__()
+            async for code, value in stream:
                 if code == OK:
                     yield value
                 elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
@@ -137,7 +151,6 @@ class AsyncClientCore:
                 else:
                     raise Exception(value)
         finally:
-            print("finally")
             await request.__aexit__(None, None, None)
 
 
