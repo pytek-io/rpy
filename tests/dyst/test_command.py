@@ -13,9 +13,10 @@ from tests.utils import (
 
 
 class RemoteObject:
-    def __init__(self, server) -> None:
+    def __init__(self, server, attribute) -> None:
         self.server = server
         self.ran_tasks = 0
+        self.attribute = attribute
 
     @remote
     async def echo(self, message: str):
@@ -34,8 +35,8 @@ class RemoteObject:
 
 @pytest.mark.anyio
 async def test_attribute():
-    async with create_test_environment(RemoteObject) as (proxy, _actual_object):
-        assert 0 == await proxy.ran_tasks
+    async with create_test_environment(RemoteObject, args=("test",)) as (proxy, _actual_object):
+        assert "test" == await proxy.attribute
 
 
 @pytest.mark.anyio

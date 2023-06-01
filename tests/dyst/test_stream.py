@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 import anyio
 import anyio.abc
@@ -17,18 +17,18 @@ from tests.utils import (
 class RemoteObject:
     def __init__(self, server):
         self.server = server
-        self.ran_tasks = 0
+        self.current_value = 0
+        self.finally_called = False
 
     @remote_iter
     async def count(self, bound: int) -> AsyncIterator[int]:
-        test = 0
         try:
             for i in range(bound):
                 await anyio.sleep(A_LITTLE_BIT_OF_TIME)
-                test = i
+                self.current_value = i
                 yield i
         finally:
-            print("count is done", test)
+            self.finally_called = True
 
     @remote_iter
     async def stream_exception(self, exception) -> AsyncIterator[int]:
@@ -65,10 +65,9 @@ async def test_stream_cancellation():
             with anyio.move_on_after(1):
                 async with asyncstdlib.scoped_iter(proxy.count(100)) as numbers:
                     async for i in numbers:
-                        print(i)
+                        pass
         await anyio.sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
-        print("done")
-        # assert client_session.running_tasks == 0 and client_session.ran_tasks == 1
+        print(await proxy.finally_called)
 
 
 @pytest.mark.anyio
@@ -79,4 +78,3 @@ async def test_stream_early_exit():
                 if i == 3:
                     break
     await anyio.sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
-    print("done")

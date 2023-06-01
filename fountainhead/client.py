@@ -41,14 +41,14 @@ class AsyncClient:
         time_stamp: Optional[datetime] = None,
         override: bool = False,
     ) -> datetime:
-        return await self.client.evaluate_command(
+        return await self.client.evaluate_coroutine(
             ClientSession.write_event,
             (topic, self.serializer(event), time_stamp, override),
         )
 
     async def read_event(self, topic: str, time_stamp: datetime):
         return self.deserializer(
-            await self.client.evaluate_command(ClientSession.read_event, (topic, time_stamp))
+            await self.client.evaluate_coroutine(ClientSession.read_event, (topic, time_stamp))
         )
 
 

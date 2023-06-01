@@ -10,7 +10,6 @@ import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .common import create_context_async_generator, identity
 from .exception import UserException
 
 
@@ -18,21 +17,16 @@ if sys.version_info < (3, 10):
     from asyncstdlib import anext
 
 OK = "OK"
-START_TASK = "Start task"
-CLOSE_SENTINEL = "Done"
-SHUTDOWN = "Shutdown"
+CLOSE_SENTINEL = "Close sentinel"
 CLOSE_STREAM = "Close stream"
-CANCEL_TASK = "Cancel task"
 CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
 USER_EXCEPTION = "UserException"
-COMMAND = "Command"
 CREATE_OBJECT = "Create object"
 GET_ATTRIBUTE = "Get attribute"
+ASYNC_GENERATOR = "Async generator"
+COROUTINE = "coroutine"
 STREAM_BUFFER = 100
-RESULT = "Result"
-IS_GENERATOR = True
-IS_COROUTINE = False
 
 
 def remote_iter(method):
@@ -45,13 +39,8 @@ def remote(method):
     return method
 
 
-async def fetch_attribute(self, name):
-    request_id = next(self.client.request_id)
-    sink, stream = anyio.create_memory_object_stream()
-    self.client.pending_requests[request_id] = sink
-    await self.client.send(GET_ATTRIBUTE, (self.object_id, request_id, name))
-    code, value = await stream.receive()
-    return value
+async def get_attribute(self, name):
+    return await self.client.get_attribute(self.object_id, name)
 
 
 class AsyncClientCore:
@@ -60,11 +49,11 @@ class AsyncClientCore:
     def __init__(self, task_group, connection: Connection, name=None) -> None:
         self.task_group = task_group
         self.connection = connection
-        self.request_id = count()
-        self.pending_requests = {}
         self.name = name
-        self.object_counter = count()
-        self.pending_objects = {}
+        self.request_id = count()
+        self.object_id = count()
+        self.pending_requests = {}
+        self.current_streams = {}
 
     async def send(self, *args):
         await self.connection.send(args)
@@ -74,27 +63,62 @@ class AsyncClientCore:
     ):
         await self.send(self.name)
         task_status.started()
-        async for code, message in self.connection:
-            if code == RESULT:
-                request_id, code, result = message
-                sink = self.pending_requests.get(request_id)
+        async for code, message_id, (status, result) in self.connection:
+            if code in (COROUTINE, GET_ATTRIBUTE, CREATE_OBJECT):
+                future = self.pending_requests.get(message_id)
+                if future:
+                    future.set_result((status, result))
+            elif code == ASYNC_GENERATOR:
+                sink = self.current_streams.get(message_id)
                 if sink:
-                    sink.send_nowait((code, result))
-            elif code == CREATE_OBJECT:
-                object_id, code, message = message
-                self.pending_objects.pop(object_id).set_result((code, message))
+                    sink.send_nowait((status, result))
+            else:
+                raise Exception(f"Unexpected code {code} received.")
+
+    @contextlib.contextmanager
+    def manage_insertion(self, register, value):
+        request_id = next(self.request_id)
+        register[request_id] = value
+        try:
+            yield request_id
+        finally:
+            register.pop(request_id, None)
+
+    async def manage_request(self, code, args, is_cancellable=False) -> Any:
+        future = asyncio.Future()
+        with self.manage_insertion(self.pending_requests, future) as request_id:
+            try:
+                await self.send(code, request_id, args)
+                code, result = await future
+            except anyio.get_cancelled_exc_class():
+                if is_cancellable:
+                    with anyio.CancelScope(shield=True):
+                        await self.send(code, request_id, None)
+                raise
+        if code == OK:
+            return result
+        elif code == CANCELLED_TASK:
+            return
+        if code == USER_EXCEPTION:
+            raise UserException(result)
+        else:
+            raise Exception(result)
+
+    async def evaluate_coroutine(self, object_id: int, command: str, *args, **kwargs) -> Any:
+        return await self.manage_request(
+            COROUTINE, (object_id, command, args, kwargs), is_cancellable=True
+        )
+
+    async def get_attribute(self, object_id: int, name: str):
+        return await self.manage_request(GET_ATTRIBUTE, (object_id, name))
 
     @contextlib.asynccontextmanager
     async def create_remote_object(self, object_class, args, kwarg):
-        object_id = next(self.object_counter)
-        self.pending_objects[object_id] = asyncio.Future()
+        object_id = next(self.object_id)
+        await self.manage_request(CREATE_OBJECT, (object_id, object_class, args, kwarg))
         try:
-            await self.send(CREATE_OBJECT, (object_id, object_class, args, kwarg))
-            code, details = await self.pending_objects[object_id]
-            if code != OK:
-                raise Exception(details)
             object_class = type(
-                object_class.__name__, (object_class,), {"__getattr__": fetch_attribute}
+                object_class.__name__, (object_class,), {"__getattr__": get_attribute}
             )
             remote_object = object_class.__new__(object_class)
             remote_object.client = self
@@ -103,55 +127,36 @@ class AsyncClientCore:
                 if inspect.isfunction(attr):
                     if attr.__name__.endswith("@remote"):
                         setattr(
-                            remote_object, name, partial(self.evaluate_command, object_id, name)
+                            remote_object, name, partial(self.evaluate_coroutine, object_id, name)
                         )
                     elif attr.__name__.endswith("@remote_iter"):
                         setattr(
                             remote_object,
                             name,
-                            partial(self.create_cancellable_stream, object_id, name),
+                            partial(self.evaluate_async_generator, object_id, name),
                         )
             yield remote_object
         finally:
-            await self.send(CREATE_OBJECT, (object_id, None, None, None))
-
-    @contextlib.asynccontextmanager
-    async def manage_request(self, object_id, command, is_generator, args, buffer_size=1):
-        sink, stream = anyio.create_memory_object_stream(buffer_size)
-        request_id = next(self.request_id)
-        self.pending_requests[request_id] = sink
-        await self.send(COMMAND, (object_id, request_id, command, is_generator, args))
-        try:
-            yield stream
-        finally:
             with anyio.CancelScope(shield=True):
-                await self.send(COMMAND, (object_id, request_id, None, None, None))
-            self.pending_requests.pop(request_id, None)
+                await self.send(CREATE_OBJECT, 0, (object_id, None, None, None))
 
-    async def evaluate_command(self, object_id, command: Any, *args, **kwargs):
-        async with self.manage_request(object_id, command, IS_COROUTINE, args) as stream:
-            code, result = await stream.receive()
-            if code == OK:
-                return result
-            elif code == CANCELLED_TASK:
-                return
-            if code == USER_EXCEPTION:
-                raise UserException(result)
-            raise Exception(result)
-
-    async def create_cancellable_stream(self, object_id, command, *args, **kwargs):
-        request = self.manage_request(object_id, command, IS_GENERATOR, args, STREAM_BUFFER)
-        try:
-            stream = await request.__aenter__()
-            async for code, value in stream:
-                if code == OK:
-                    yield value
-                elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
-                    break
-                else:
-                    raise Exception(value)
-        finally:
-            await request.__aexit__(None, None, None)
+    async def evaluate_async_generator(self, object_id, command, *args, **kwargs):
+        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER)
+        with self.manage_insertion(self.current_streams, sink) as stream_id:
+            await self.send(ASYNC_GENERATOR, stream_id, (object_id, command, args, kwargs))
+            try:
+                async for code, value in stream:
+                    if code == OK:
+                        yield value
+                    elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
+                        break
+                    elif code == USER_EXCEPTION:
+                        raise UserException(value)
+                    else:
+                        raise Exception(value)
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await self.send(ASYNC_GENERATOR, stream_id, None)
 
 
 @contextlib.asynccontextmanager

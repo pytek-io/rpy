@@ -80,12 +80,12 @@ async def create_test_environment_core(
 
 
 @contextlib.asynccontextmanager
-async def create_test_environment(session_class, server_class=ServerBase) -> AsyncIterator[Any]:
+async def create_test_environment(session_class, server_class=ServerBase, args=()) -> AsyncIterator[Any]:
     async with create_test_environment_core(server_class) as (
         server,
         clients,
     ):
-        async with clients[0].create_remote_object(session_class, (), {}) as proxy:
+        async with clients[0].create_remote_object(session_class, args, {}) as proxy:
             session = server.sessions["client_0"]
             actual_object = session.objects[proxy.object_id]
             yield proxy, actual_object
