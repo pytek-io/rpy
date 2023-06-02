@@ -41,14 +41,14 @@ class RemoteObject:
 
 @pytest.mark.anyio
 async def test_stream_count():
-    async with create_test_environment(RemoteObject) as (proxy, _actual_object):
+    async with create_test_environment(RemoteObject) as proxy:
         async for i, value in asyncstdlib.enumerate(proxy.count(10)):
             assert i == value
 
 
 @pytest.mark.anyio
 async def test_stream_exception():
-    async with create_test_environment(RemoteObject) as (proxy, actual_object):
+    async with create_test_environment(RemoteObject) as proxy:
         with pytest.raises(Exception) as e_info:
             async with asyncstdlib.scoped_iter(
                 proxy.stream_exception(UserException(ERROR_MESSAGE))
@@ -60,7 +60,7 @@ async def test_stream_exception():
 
 @pytest.mark.anyio
 async def test_stream_cancellation():
-    async with create_test_environment(RemoteObject) as (proxy, actual_object):
+    async with create_test_environment(RemoteObject) as proxy:
         async with anyio.create_task_group():
             with anyio.move_on_after(1):
                 async with asyncstdlib.scoped_iter(proxy.count(100)) as numbers:
@@ -72,7 +72,7 @@ async def test_stream_cancellation():
 
 @pytest.mark.anyio
 async def test_stream_early_exit():
-    async with create_test_environment(RemoteObject) as (proxy, actual_object):
+    async with create_test_environment(RemoteObject) as proxy:
         async with asyncstdlib.scoped_iter(proxy.count(100)) as numbers:
             async for i in numbers:
                 if i == 3:

@@ -1,5 +1,4 @@
 import contextlib
-import inspect
 from functools import wraps
 from pickle import dumps, loads
 from typing import Any, AsyncIterator, List, Tuple
@@ -8,8 +7,7 @@ import anyio
 import anyio.abc
 
 import dyst.abc
-from dyst import AsyncClientCore
-from dyst.server import ServerBase
+from dyst import AsyncClientCore, SessionManager
 from fountainhead.client import _create_async_client_core
 
 
@@ -58,11 +56,10 @@ def create_test_connection(
 
 @contextlib.asynccontextmanager
 async def create_test_environment_core(
-    create_server, nb_clients: int = 1
-) -> AsyncIterator[Tuple[Any, List[AsyncClientCore]]]:
+    server, nb_clients: int = 1
+) -> AsyncIterator[List[AsyncClientCore]]:
     clients = []
     async with anyio.create_task_group() as task_group:
-        server = create_server(task_group)
         async with contextlib.AsyncExitStack() as exit_stack:
             for i in range(nb_clients):
                 client_name = f"client_{i}"
@@ -75,31 +72,14 @@ async def create_test_environment_core(
                 )
                 task_group.start_soon(client_session_core.process_messages)
                 clients.append(client)
-            yield server, clients
+            yield clients
             task_group.cancel_scope.cancel()
 
 
 @contextlib.asynccontextmanager
-async def create_test_environment(session_class, server_class=ServerBase, args=()) -> AsyncIterator[Any]:
-    async with create_test_environment_core(server_class) as (
-        server,
-        clients,
-    ):
-        async with clients[0].create_remote_object(session_class, args, {}) as proxy:
-            session = server.sessions["client_0"]
-            actual_object = session.objects[proxy.object_id]
-            yield proxy, actual_object
-
-
-def update_running_tasks(method):
-    @wraps(method)
-    async def result(self, *args, **kwargs):
-        try:
-            coroutine_or_async_generator = method(self, *args, **kwargs)
-            if inspect.iscoroutine(coroutine_or_async_generator):
-                return await coroutine_or_async_generator
-            return coroutine_or_async_generator
-        finally:
-            self.ran_tasks += 1
-
-    return result
+async def create_test_environment(
+    remote_object_class, server=None, args=()
+) -> AsyncIterator[Any]:
+    async with create_test_environment_core(SessionManager(server)) as clients:
+        async with clients[0].create_remote_object(remote_object_class, args, {}) as proxy:
+            yield proxy

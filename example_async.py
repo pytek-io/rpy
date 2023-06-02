@@ -1,11 +1,11 @@
 import argparse
-from datetime import datetime, timedelta
 import logging
 import random
+from datetime import datetime, timedelta
 
 import anyio
 
-from fountainhead import create_async_client, AsyncClient
+from fountainhead import ClientSession
 
 
 async def write_events(client, topic):
@@ -15,9 +15,9 @@ async def write_events(client, topic):
         logging.info(f"Saved {topic} event at {time_stamp}")
 
 
-async def subscribe_to_events(client: AsyncClient, topic: str):
+async def subscribe_to_events(client: ClientSession, topic: str):
     start = datetime.now() - timedelta(minutes=100)
-    async with client.read_events(topic, start, None) as events:
+    async with client.read_events(topic, start, None, False) as events:
         async for time_stamp, content in events:
             print(f"Received {topic} {time_stamp} {content}")
 

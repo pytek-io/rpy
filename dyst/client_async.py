@@ -10,7 +10,7 @@ import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .exception import UserException
+from .common import scoped_insert, UserException
 
 
 if sys.version_info < (3, 10):
@@ -75,18 +75,10 @@ class AsyncClientCore:
             else:
                 raise Exception(f"Unexpected code {code} received.")
 
-    @contextlib.contextmanager
-    def manage_insertion(self, register, value):
-        request_id = next(self.request_id)
-        register[request_id] = value
-        try:
-            yield request_id
-        finally:
-            register.pop(request_id, None)
-
     async def manage_request(self, code, args, is_cancellable=False) -> Any:
+        request_id = next(self.request_id)
         future = asyncio.Future()
-        with self.manage_insertion(self.pending_requests, future) as request_id:
+        with scoped_insert(self.pending_requests, request_id, future):
             try:
                 await self.send(code, request_id, args)
                 code, result = await future
@@ -142,7 +134,8 @@ class AsyncClientCore:
 
     async def evaluate_async_generator(self, object_id, command, *args, **kwargs):
         sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER)
-        with self.manage_insertion(self.current_streams, sink) as stream_id:
+        stream_id = next(self.request_id)
+        with scoped_insert(self.current_streams, stream_id, sink):
             await self.send(ASYNC_GENERATOR, stream_id, (object_id, command, args, kwargs))
             try:
                 async for code, value in stream:

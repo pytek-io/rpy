@@ -1,11 +1,13 @@
+import asyncio
 import contextlib
 import logging
+import signal
 import sys
 import traceback
-from collections import defaultdict
-from typing import Any, Dict, Set, Tuple
+from typing import Any, Tuple
 
 import anyio
+import anyio.abc
 import asyncstdlib
 
 from .abc import Connection
@@ -20,15 +22,13 @@ from .client_async import (
     OK,
     USER_EXCEPTION,
 )
+from .common import scoped_insert, UserException
 from .connection import TCPConnection
-from .exception import UserException
+from .pubsub import PubSubManager
 
 
 if sys.version_info < (3, 10):
     from asyncstdlib import anext
-
-SUBSCRIPTION_BUFFER_SIZE = 100
-OVERRIDE_ERROR_MESSAGE = "Trying to overwrite an existing event without overwrite set to True."
 
 
 class ClientSession:
@@ -125,37 +125,10 @@ class ClientSession:
         self.task_group.cancel_scope.cancel()
 
 
-class ServerBase:
-    def __init__(self, task_group) -> None:
-        self.task_group = task_group
-        self.subscriptions: Dict[str, Set] = defaultdict(set)
+class SessionManager:
+    def __init__(self, server: Any) -> None:
         self.sessions = {}
-
-    @contextlib.contextmanager
-    def register_session(self, client_name, client_session):
-        try:
-            self.sessions[client_name] = client_session
-            yield client_session
-        finally:
-            self.sessions.pop(client_name, None)
-
-    @contextlib.contextmanager
-    def subscribe(self, topic: Any):
-        sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
-        subscriptions = self.subscriptions[topic]
-        try:
-            subscriptions.add(sink)
-            yield stream
-        finally:
-            if sink in subscriptions:
-                subscriptions.remove(sink)
-
-    def broadcast_to_subscriptions(self, topic: Any, message: Any):
-        for subscription in self.subscriptions[topic]:
-            try:
-                subscription.send_nowait(message)
-            except anyio.WouldBlock:
-                logging.warning("ignoring subscriber which is too far behind")
+        self.server = server
 
     @contextlib.asynccontextmanager
     async def on_new_connection(self, connection: Connection):
@@ -164,8 +137,10 @@ class ServerBase:
             (client_name,) = await anext(connection)
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                connection_session = ClientSession(self, task_group, client_name, connection)
-                with self.register_session(client_name, connection_session):
+                connection_session = ClientSession(
+                    self.server, task_group, client_name, connection
+                )
+                with scoped_insert(self.sessions, client_name, connection_session):
                     async with asyncstdlib.closing(connection_session):
                         yield connection_session
         except anyio.get_cancelled_exc_class():
@@ -176,8 +151,37 @@ class ServerBase:
         finally:
             logging.info(f"{client_name} disconnected")
 
-    async def on_new_connection_raw(self, reader, writer):
-        async with self.on_new_connection(
+
+async def signal_handler(scope: anyio.abc.CancelScope):
+    with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
+        async for signum in signals:
+            if signum == signal.SIGINT:
+                print("Ctrl+C pressed!")
+            else:
+                print("Terminated!")
+
+            scope.cancel()
+            return
+
+
+async def _serve_tcp(port, session_manager):
+    session_manager = SessionManager(session_manager)
+
+    async def on_new_connection_raw(reader, writer):
+        async with session_manager.on_new_connection(
             TCPConnection(reader, writer, throw_on_eof=False)
         ) as client_core:
             await client_core.process_messages()
+
+    async with await asyncio.start_server(on_new_connection_raw, "localhost", port) as tcp_server:
+        await tcp_server.serve_forever()
+
+
+async def handle_signals(main, *args, **kwargs):
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(signal_handler, task_group.cancel_scope)
+        task_group.start_soon(main, *args, **kwargs)
+
+
+async def start_tcp_server(port, server):
+    await handle_signals(_serve_tcp, port, server)

@@ -41,10 +41,6 @@ async def create_context_async_generator(cancellable_stream: Callable) -> AsyncI
         task_group.cancel_scope.cancel()
 
 
-def identity(x):
-    return x
-
-
 @contextlib.contextmanager
 def print_error_stack(location):
     try:
@@ -54,3 +50,18 @@ def print_error_stack(location):
         print(location)
         print("=" * 20)
         raise
+
+
+@contextlib.contextmanager
+def scoped_insert(register, key, value):
+    register[key] = value
+    try:
+        yield key, value
+    finally:
+        register.pop(key, None)
+
+
+class UserException(Exception):
+    """Use this to signal expected errors to users."""
+
+    pass
