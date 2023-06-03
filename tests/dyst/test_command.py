@@ -7,7 +7,7 @@ from tests.utils import (
     A_LITTLE_BIT_OF_TIME,
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
-    create_test_environment,
+    create_test_proxy_async_object,
 )
 
 
@@ -33,15 +33,16 @@ class RemoteObject:
         finally:
             self.ran_tasks += 1
 
+
 @pytest.mark.anyio
 async def test_attribute():
-    async with create_test_environment(RemoteObject, args=("test",)) as proxy:
+    async with create_test_proxy_async_object(RemoteObject, args=("test",)) as proxy:
         assert "test" == await proxy.attribute
 
 
 @pytest.mark.anyio
 async def test_command_echo():
-    async with create_test_environment(RemoteObject) as proxy:
+    async with create_test_proxy_async_object(RemoteObject) as proxy:
         value = "test"
         returned_value = await proxy.echo(value)
         assert returned_value is not value
@@ -50,7 +51,7 @@ async def test_command_echo():
 
 @pytest.mark.anyio
 async def test_command_exception():
-    async with create_test_environment(RemoteObject) as proxy:
+    async with create_test_proxy_async_object(RemoteObject) as proxy:
         with pytest.raises(UserException) as e_info:
             await proxy.throw_exception(UserException(ERROR_MESSAGE))
         assert e_info.value.args[0] == ERROR_MESSAGE
@@ -58,7 +59,7 @@ async def test_command_exception():
 
 @pytest.mark.anyio
 async def test_command_cancellation():
-    async with create_test_environment(RemoteObject) as proxy:
+    async with create_test_proxy_async_object(RemoteObject) as proxy:
         async with anyio.create_task_group() as task_group:
 
             async def cancellable_task(task_status: anyio.abc.TaskStatus):
@@ -74,7 +75,7 @@ async def test_command_cancellation():
 
 @pytest.mark.anyio
 async def test_command_time_out():
-    async with create_test_environment(RemoteObject) as proxy:
+    async with create_test_proxy_async_object(RemoteObject) as proxy:
         async with anyio.create_task_group():
             with anyio.move_on_after(1):
                 await proxy.sleep_forever()

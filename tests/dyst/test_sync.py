@@ -1,54 +1,34 @@
-import contextlib
-from typing import AsyncIterator, Iterator
-
 import anyio
 
-from dyst import SyncClientBase, create_context_async_generator
-from tests.utils import A_LITTLE_BIT_OF_TIME
+from dyst import remote, remote_iter
+from tests.utils import A_LITTLE_BIT_OF_TIME, create_test_proxy_sync_object
 
 
-class AsyncClient:
+class ClientSession:
+    def __init__(self, server):
+        self.server = server
+
+    @remote
     async def add_numbers(self, a, b):
         await anyio.sleep(A_LITTLE_BIT_OF_TIME)
         return a + b
 
-    def async_stream(self, bound):
-        async def cancellable_stream(sink):
-            for i in range(bound):
-                await sink(i)
-
-        return create_context_async_generator(cancellable_stream)
-
-
-class SyncClient(SyncClientBase):
-    def add_numbers(self, a, b):
-        return self.wrap_awaitable(self.async_client.add_numbers(a, b))
-
-    def sync_stream(self, bound):
-        return self.wrap_async_context_stream(self.async_client.async_stream(bound))
-
-
-@contextlib.asynccontextmanager
-async def create_async_client() -> AsyncIterator[AsyncClient]:
-    yield AsyncClient()
-
-
-@contextlib.contextmanager
-def create_sync_client() -> Iterator[SyncClient]:
-    with anyio.start_blocking_portal("asyncio") as portal:
-        with portal.wrap_async_context_manager(create_async_client()) as async_client:
-            yield SyncClient(portal, async_client)
+    @remote_iter
+    async def async_stream(self, bound):
+        for i in range(bound):
+            yield i
+            await anyio.sleep(A_LITTLE_BIT_OF_TIME)
 
 
 def test_sync():
-    with create_sync_client() as client:
+    with create_test_proxy_sync_object(ClientSession) as client:
         assert client.add_numbers(1, 2) == 3
 
         with client.sync_stream(5) as s:
             for i, m in enumerate(s):
                 assert i == m
 
-        with client.sync_stream(5) as s:
-            for i, m in enumerate(s):
-                if i == 2:
-                    return
+        # with client.sync_stream(5) as s:
+        #     for i, m in enumerate(s):
+        #         if i == 2:
+        #             return

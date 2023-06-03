@@ -2,24 +2,27 @@ import argparse
 import logging
 import random
 from datetime import datetime, timedelta
+from pickle import dumps, loads
 
 import anyio
+from asyncstdlib import scoped_iter
 
-from fountainhead import ClientSession
+from fountainhead import ClientSession, create_async_client
 
 
 async def write_events(client, topic):
     while True:
         await anyio.sleep(random.random() * 5)
-        time_stamp = await client.write_event(topic, {"origin": "sftp", "s3": "fdsljd"})
+        test = dumps({"origin": "sftp", "s3": "fdsljd"})
+        time_stamp = await client.write_event(topic, dumps({"origin": "sftp", "s3": "fdsljd"}))
         logging.info(f"Saved {topic} event at {time_stamp}")
 
 
 async def subscribe_to_events(client: ClientSession, topic: str):
     start = datetime.now() - timedelta(minutes=100)
-    async with client.read_events(topic, start, None, False) as events:
+    async with scoped_iter(client.read_events(topic, start, None, False)) as events:
         async for time_stamp, content in events:
-            print(f"Received {topic} {time_stamp} {content}")
+            print(f"Received {topic} {time_stamp} {loads(content)}")
 
 
 async def main_async(args):

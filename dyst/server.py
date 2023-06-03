@@ -24,7 +24,6 @@ from .client_async import (
 )
 from .common import scoped_insert, UserException
 from .connection import TCPConnection
-from .pubsub import PubSubManager
 
 
 if sys.version_info < (3, 10):
@@ -79,14 +78,14 @@ class ClientSession:
         finally:
             self.running_tasks.pop(request_id, None)
 
-    def create_object(self, object_id, object_class, args, kwarg):
+    async def create_object(self, request_id, object_id, object_class, args, kwarg):
         code, message = OK, None
         if object_class:
             try:
                 self.objects[object_id] = object_class(self.server, *args, **kwarg)
             except Exception:
                 code, message = EXCEPTION, traceback.format_exc()
-            return code, message
+            await self.send(CREATE_OBJECT, request_id, (code, message))
         else:
             self.objects.pop(object_id, None)
 
@@ -115,9 +114,7 @@ class ClientSession:
                     GET_ATTRIBUTE, request_id, (OK, getattr(self.objects[object_id], name))
                 )
             elif code == CREATE_OBJECT:
-                result = self.create_object(*payload)
-                if result:
-                    await self.send(CREATE_OBJECT, request_id, result)
+                await self.create_object(request_id, *payload)
             else:
                 raise Exception(f"Unknown code {code} with payload {payload}")
 
@@ -164,8 +161,8 @@ async def signal_handler(scope: anyio.abc.CancelScope):
             return
 
 
-async def _serve_tcp(port, session_manager):
-    session_manager = SessionManager(session_manager)
+async def _serve_tcp(port, server):
+    session_manager = SessionManager(server)
 
     async def on_new_connection_raw(reader, writer):
         async with session_manager.on_new_connection(
@@ -185,3 +182,4 @@ async def handle_signals(main, *args, **kwargs):
 
 async def start_tcp_server(port, server):
     await handle_signals(_serve_tcp, port, server)
+

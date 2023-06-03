@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 from datetime import datetime
 from typing import Any, Iterator, Optional
@@ -7,12 +6,13 @@ import anyio
 import janus
 
 from dyst import CLOSE_STREAM, EXCEPTION, OK
+from .client_async import AsyncClient, connect
 
 
-class SyncClientBase:
+class SyncClient:
     def __init__(self, portal, async_client) -> None:
         self.portal = portal
-        self.async_client = async_client
+        self.async_client: AsyncClient = async_client
 
     @contextlib.asynccontextmanager
     async def _wrap_context_async_stream(self, cancellable_stream, *args, **kwargs):
@@ -52,39 +52,21 @@ class SyncClientBase:
         )
 
     def wrap_awaitable(self, method, *args, **kwargs):
-        return self.portal.call(
-            lambda: method if asyncio.iscoroutine(method) else method, *args, **kwargs
-        )
+        def result(*args, **kwargs):
+            return self.portal.call(method, *args, **kwargs)
 
+        return result
 
-class SyncClient(SyncClientBase):
-    def read_events(
-        self,
-        topic: str,
-        start: Optional[datetime],
-        end: Optional[datetime],
-        time_stamps_only: bool = False,
-    ):
-        return self.wrap_async_context_stream(
-            self.async_client.read_events(topic, start, end, time_stamps_only)
-        )
-
-    def write_event(
-        self,
-        topic: str,
-        event: Any,
-        time_stamp: Optional[datetime] = None,
-        override: bool = False,
-    ):
-        return self.wrap_awaitable(
-            self.async_client.write_event(topic, event, time_stamp, override)
+    def create_remote_object(self, object_class, args=(), kwarg={}):
+        return self.portal.wrap_async_context_manager(
+            self.async_client.create_remote_object(object_class, args, kwarg, sync_client=self)
         )
 
 
 @contextlib.contextmanager
 def create_sync_client(host_name: str, port: int, name: str) -> Iterator[SyncClient]:
     with anyio.start_blocking_portal("asyncio") as portal:
-        with portal.wrap_async_context_manager(
-            create_async_client(host_name, port, name)
-        ) as async_client:
+        with portal.wrap_async_context_manager(connect(host_name, port, name)) as async_client:
             yield SyncClient(portal, async_client)
+
+

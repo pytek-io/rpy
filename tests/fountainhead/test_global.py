@@ -6,9 +6,8 @@ from typing import AsyncIterator, List
 
 import pytest
 
-from fountainhead.client import OVERRIDE_ERROR_MESSAGE, ClientSession
-from fountainhead.server import Server
-
+from fountainhead.client import ClientSession, Server
+from fountainhead import OVERWRITE_ERROR_MESSAGE
 
 if sys.version_info < (3, 10):
     from asyncstdlib import anext
@@ -42,7 +41,7 @@ async def test_override():
         new_value = dumps("hello world")
         with pytest.raises(Exception) as e_info:
             await client_session.write_event(topic, new_value, time_stamp, False)
-        assert e_info.value.args[0] == OVERRIDE_ERROR_MESSAGE
+        assert e_info.value.args[0] == OVERWRITE_ERROR_MESSAGE
         new_time_stamp = await client_session.write_event(topic, new_value, time_stamp, overwrite=True)
         assert new_time_stamp == time_stamp
         returned_value = await client_session.read_event(topic, time_stamp)

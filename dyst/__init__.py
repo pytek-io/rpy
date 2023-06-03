@@ -2,13 +2,14 @@ from .client_async import (
     CLOSE_STREAM,
     EXCEPTION,
     OK,
-    AsyncClientCore,
+    AsyncClient,
     _create_async_client_core,
+    connect,
     remote,
     remote_iter,
 )
-from .client_sync import SyncClientBase
-from .common import create_context_async_generator, UserException
-from .connection import TCPConnection, connect
-from .server import SessionManager, start_tcp_server
+from .client_sync import create_sync_client, SyncClient
+from .common import UserException, create_context_async_generator
+from .connection import TCPConnection, connect_to_tcp_server
 from .pubsub import PubSubManager
+from .server import SessionManager, start_tcp_server

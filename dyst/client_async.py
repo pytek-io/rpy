@@ -1,20 +1,17 @@
 import asyncio
 import contextlib
 import inspect
-import sys
 from functools import partial
 from itertools import count
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .common import scoped_insert, UserException
+from .common import UserException, scoped_insert
+from .connection import connect_to_tcp_server
 
-
-if sys.version_info < (3, 10):
-    from asyncstdlib import anext
 
 OK = "OK"
 CLOSE_SENTINEL = "Close sentinel"
@@ -25,7 +22,7 @@ USER_EXCEPTION = "UserException"
 CREATE_OBJECT = "Create object"
 GET_ATTRIBUTE = "Get attribute"
 ASYNC_GENERATOR = "Async generator"
-COROUTINE = "coroutine"
+COROUTINE = "Coroutine"
 STREAM_BUFFER = 100
 
 
@@ -43,7 +40,7 @@ async def get_attribute(self, name):
     return await self.client.get_attribute(self.object_id, name)
 
 
-class AsyncClientCore:
+class AsyncClient:
     """Implements non functional specific details."""
 
     def __init__(self, task_group, connection: Connection, name=None) -> None:
@@ -96,41 +93,13 @@ class AsyncClientCore:
         else:
             raise Exception(result)
 
+    async def get_attribute(self, object_id: int, name: str):
+        return await self.manage_request(GET_ATTRIBUTE, (object_id, name))
+
     async def evaluate_coroutine(self, object_id: int, command: str, *args, **kwargs) -> Any:
         return await self.manage_request(
             COROUTINE, (object_id, command, args, kwargs), is_cancellable=True
         )
-
-    async def get_attribute(self, object_id: int, name: str):
-        return await self.manage_request(GET_ATTRIBUTE, (object_id, name))
-
-    @contextlib.asynccontextmanager
-    async def create_remote_object(self, object_class, args, kwarg):
-        object_id = next(self.object_id)
-        await self.manage_request(CREATE_OBJECT, (object_id, object_class, args, kwarg))
-        try:
-            object_class = type(
-                object_class.__name__, (object_class,), {"__getattr__": get_attribute}
-            )
-            remote_object = object_class.__new__(object_class)
-            remote_object.client = self
-            remote_object.object_id = object_id
-            for name, attr in ((name, getattr(object_class, name)) for name in dir(object_class)):
-                if inspect.isfunction(attr):
-                    if attr.__name__.endswith("@remote"):
-                        setattr(
-                            remote_object, name, partial(self.evaluate_coroutine, object_id, name)
-                        )
-                    elif attr.__name__.endswith("@remote_iter"):
-                        setattr(
-                            remote_object,
-                            name,
-                            partial(self.evaluate_async_generator, object_id, name),
-                        )
-            yield remote_object
-        finally:
-            with anyio.CancelScope(shield=True):
-                await self.send(CREATE_OBJECT, 0, (object_id, None, None, None))
 
     async def evaluate_async_generator(self, object_id, command, *args, **kwargs):
         sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER)
@@ -151,11 +120,49 @@ class AsyncClientCore:
                 with anyio.CancelScope(shield=True):
                     await self.send(ASYNC_GENERATOR, stream_id, None)
 
+    @contextlib.asynccontextmanager
+    async def create_remote_object(
+        self, object_class, args=(), kwarg={}, sync_client=Optional["SyncClient"]
+    ):
+        object_id = next(self.object_id)
+        await self.manage_request(CREATE_OBJECT, (object_id, object_class, args, kwarg))
+        try:
+            object_class = type(
+                object_class.__name__, (object_class,), {"__getattr__": get_attribute}
+            )
+            remote_object = object_class.__new__(object_class)
+            remote_object.client = self
+            remote_object.object_id = object_id
+            for name, attr in ((name, getattr(object_class, name)) for name in dir(object_class)):
+                if inspect.isfunction(attr):
+                    if attr.__name__.endswith("@remote"):
+                        method = partial(self.evaluate_coroutine, object_id, name)
+                        if sync_client:
+                            method = partial(sync_client.wrap_awaitable(method))
+                        setattr(remote_object, name, method)
+                    elif attr.__name__.endswith("@remote_iter"):
+                        method = partial(self.evaluate_async_generator, object_id, name)
+                        if sync_client:
+                            method = partial(sync_client.wrap_async_context_stream(method))
+                        setattr(remote_object, name, method)
+            yield remote_object
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self.send(CREATE_OBJECT, 0, (object_id, None, None, None))
+
 
 @contextlib.asynccontextmanager
 async def _create_async_client_core(
     task_group, connection: Connection, name: str
-) -> AsyncIterator[AsyncClientCore]:
-    client = AsyncClientCore(task_group, connection, name=name)
+) -> AsyncIterator[AsyncClient]:
+    client = AsyncClient(task_group, connection, name=name)
     await task_group.start(client.process_messages_from_server)
     yield client
+
+
+@contextlib.asynccontextmanager
+async def connect(host_name: str, port: int, name: str) -> AsyncIterator[AsyncClient]:
+    async with anyio.create_task_group() as task_group:
+        async with connect_to_tcp_server(host_name, port) as connection:
+            async with _create_async_client_core(task_group, connection, name) as client:
+                yield client

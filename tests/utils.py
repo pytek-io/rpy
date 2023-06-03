@@ -1,14 +1,12 @@
 import contextlib
-from functools import wraps
 from pickle import dumps, loads
-from typing import Any, AsyncIterator, List, Tuple
+from typing import Any, AsyncIterator, Iterator, List, Tuple
 
 import anyio
 import anyio.abc
 
 import dyst.abc
-from dyst import AsyncClientCore, SessionManager
-from fountainhead.client import _create_async_client_core
+from dyst import AsyncClient, SessionManager, SyncClient, _create_async_client_core
 
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
@@ -55,9 +53,9 @@ def create_test_connection(
 
 
 @contextlib.asynccontextmanager
-async def create_test_environment_core(
+async def create_test_async_clients(
     server, nb_clients: int = 1
-) -> AsyncIterator[List[AsyncClientCore]]:
+) -> AsyncIterator[List[AsyncClient]]:
     clients = []
     async with anyio.create_task_group() as task_group:
         async with contextlib.AsyncExitStack() as exit_stack:
@@ -76,10 +74,26 @@ async def create_test_environment_core(
             task_group.cancel_scope.cancel()
 
 
+@contextlib.contextmanager
+def create_test_sync_clients(server, nb_clients: int = 1) -> Iterator[List[SyncClient]]:
+    with anyio.start_blocking_portal("asyncio") as portal:
+        with portal.wrap_async_context_manager(
+            create_test_async_clients(SessionManager(server), nb_clients)
+        ) as async_clients:
+            yield [SyncClient(portal, client) for client in async_clients]
+
+
 @contextlib.asynccontextmanager
-async def create_test_environment(
+async def create_test_proxy_async_object(
     remote_object_class, server=None, args=()
 ) -> AsyncIterator[Any]:
-    async with create_test_environment_core(SessionManager(server)) as clients:
-        async with clients[0].create_remote_object(remote_object_class, args, {}) as proxy:
+    async with create_test_async_clients(SessionManager(server), nb_clients=1) as (client,):
+        async with client.create_remote_object(remote_object_class, args, {}) as proxy:
+            yield proxy
+
+
+@contextlib.contextmanager
+def create_test_proxy_sync_object(remote_object_class, server=None, args=()) -> Iterator[Any]:
+    with create_test_sync_clients(SessionManager(server), nb_clients=1) as (client,):
+        with client.create_remote_object(remote_object_class, args, {}) as proxy:
             yield proxy

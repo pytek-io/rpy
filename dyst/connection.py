@@ -61,8 +61,8 @@ class TCPConnection(Connection):
 
 
 @contextlib.asynccontextmanager
-async def connect(host_name: str, port: int, serialize=dumps, deserialize=loads):
+async def connect_to_tcp_server(host_name: str, port: int, serialize=dumps, deserialize=loads):
     reader, writer = await open_connection(host_name, port)
-    connection = TCPConnection(reader, writer, True, deserialize, serialize)
+    connection = TCPConnection(reader, writer, False, deserialize, serialize)
     async with asyncstdlib.closing(connection):
         yield connection
