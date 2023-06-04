@@ -89,6 +89,14 @@ class ClientSession:
         else:
             self.objects.pop(object_id, None)
 
+    async def get_attribute(self, request_id, object_id, name):
+        code, message = OK, None
+        try:
+            message = getattr(self.objects[object_id], name)
+        except Exception as e:
+            code, message = EXCEPTION, e
+        await self.send(GET_ATTRIBUTE, request_id, (code, message))
+
     async def process_messages(self):
         async for code, request_id, payload in self.connection:
             if code in (COROUTINE, ASYNC_GENERATOR):
@@ -109,10 +117,7 @@ class ClientSession:
                         logging.info(f"{self.name} cancelling task {request_id}")
                         request_task_group.cancel_scope.cancel()
             elif code == GET_ATTRIBUTE:
-                object_id, name = payload
-                await self.send(
-                    GET_ATTRIBUTE, request_id, (OK, getattr(self.objects[object_id], name))
-                )
+                await self.get_attribute(request_id, *payload)
             elif code == CREATE_OBJECT:
                 await self.create_object(request_id, *payload)
             else:
@@ -144,6 +149,7 @@ class SessionManager:
             raise
         except Exception as e:
             traceback.print_exc()
+            raise
             raise Exception(f"Internal error: {e}") from e
         finally:
             logging.info(f"{client_name} disconnected")
@@ -182,4 +188,3 @@ async def handle_signals(main, *args, **kwargs):
 
 async def start_tcp_server(port, server):
     await handle_signals(_serve_tcp, port, server)
-

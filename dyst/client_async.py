@@ -36,10 +36,6 @@ def remote(method):
     return method
 
 
-async def get_attribute(self, name):
-    return await self.client.get_attribute(self.object_id, name)
-
-
 class AsyncClient:
     """Implements non functional specific details."""
 
@@ -91,10 +87,12 @@ class AsyncClient:
         if code == USER_EXCEPTION:
             raise UserException(result)
         else:
+            if isinstance(result, Exception):
+                raise result
             raise Exception(result)
 
-    async def get_attribute(self, object_id: int, name: str):
-        return await self.manage_request(GET_ATTRIBUTE, (object_id, name))
+    def get_attribute(self, object_id: int, name: str):
+        return self.manage_request(GET_ATTRIBUTE, (object_id, name))
 
     async def evaluate_coroutine(self, object_id: int, command: str, *args, **kwargs) -> Any:
         return await self.manage_request(
@@ -122,13 +120,18 @@ class AsyncClient:
 
     @contextlib.asynccontextmanager
     async def create_remote_object(
-        self, object_class, args=(), kwarg={}, sync_client=Optional["SyncClient"]
+        self, object_class, args=(), kwarg={}, sync_client: Optional["SyncClient"] = None
     ):
         object_id = next(self.object_id)
         await self.manage_request(CREATE_OBJECT, (object_id, object_class, args, kwarg))
         try:
+            __getattr__ = partial(self.get_attribute, object_id)
+            if sync_client:
+                __getattr__ = partial(sync_client.wrap_awaitable(__getattr__))
             object_class = type(
-                object_class.__name__, (object_class,), {"__getattr__": get_attribute}
+                f"{object_class.__name__}Proxy",
+                (object_class,),
+                {"__getattr__": __getattr__},
             )
             remote_object = object_class.__new__(object_class)
             remote_object.client = self

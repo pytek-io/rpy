@@ -11,7 +11,17 @@ from tests.utils import (
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
     create_test_proxy_async_object,
+    create_test_proxy_sync_object,
 )
+import contextlib
+
+
+@contextlib.contextmanager
+def scoped_iter(iterable):
+    try:
+        yield iterable
+    finally:
+        iterable.close()
 
 
 class RemoteObject:
@@ -67,7 +77,7 @@ async def test_stream_cancellation():
                     async for i in numbers:
                         pass
         await anyio.sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
-        print(await proxy.finally_called)
+        assert await proxy.finally_called
 
 
 @pytest.mark.anyio
@@ -78,3 +88,21 @@ async def test_stream_early_exit():
                 if i == 3:
                     break
     await anyio.sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
+
+
+def test_stream_early_exit_sync():
+    with create_test_proxy_sync_object(RemoteObject) as proxy:
+        with scoped_iter(proxy.count(100)) as numbers:
+            for i in numbers:
+                if i == 3:
+                    break
+    # await anyio.sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
+
+
+def test_sync():
+    with create_test_proxy_sync_object(RemoteObject) as client:
+        # assert client.dummy == 0
+        # assert client.attribute == 0
+        # assert client.add_numbers(1, 2) == 3
+        for i, m in enumerate(client.count(5)):
+            assert i == m

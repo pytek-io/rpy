@@ -1,6 +1,5 @@
 import contextlib
-from datetime import datetime
-from typing import Any, Iterator, Optional
+from typing import Iterator
 
 import anyio
 import janus
@@ -15,41 +14,65 @@ class SyncClient:
         self.async_client: AsyncClient = async_client
 
     @contextlib.asynccontextmanager
-    async def _wrap_context_async_stream(self, cancellable_stream, *args, **kwargs):
+    async def _wrap_context_async_stream(self, method, *args, **kwargs):
         queue = janus.Queue()
 
-        async def wrapper():
+        async def forwarding_task():
             try:
-                async with cancellable_stream as result_stream:
-                    async for value in result_stream:
-                        await queue.async_q.put((OK, value))
+                async for value in method(*args, **kwargs):
+                    await queue.async_q.put((OK, value))
             except anyio.get_cancelled_exc_class():
+                print("forwarding_task has been cancelled")
                 raise
             except Exception as e:
                 await queue.async_q.put((EXCEPTION, e))
             finally:
+                print("closing forwarding_task, queue will be close")
                 await queue.async_q.put((CLOSE_STREAM, None))
-                task_group.cancel_scope.cancel()
+                if not task_group.cancel_scope.cancel_called:
+                    task_group.cancel_scope.cancel()
 
         def result_sync_iterator():
-            while True:
-                code, message = queue.sync_q.get()
-                if code in CLOSE_STREAM:
-                    queue.close()
-                    break
-                if code is EXCEPTION:
-                    queue.close()
-                    raise message
-                yield message
+            try:
+                while True:
+                    code, message = queue.sync_q.get()
+                    if code in CLOSE_STREAM:
+                        queue.close()
+                        break
+                    if code is EXCEPTION:
+                        queue.close()
+                        raise message
+                    yield message
+            finally:
+                print("closing result_sync_iterator")
+                # if not task_group.cancel_scope.cancel_called:
+                #     task_group.cancel_scope.cancel()
 
         async with anyio.create_task_group() as task_group:
-            task_group.start_soon(wrapper)
-            yield result_sync_iterator()
+            task_group.start_soon(forwarding_task)
+            try:
+                yield result_sync_iterator()
+                print("yielded result_sync_iterator")
+            except Exception as e:
+                print("exception in task group", e)
+                raise
+            finally:
+                print("closing task group", task_group.cancel_scope.cancel_called)
 
-    def wrap_async_context_stream(self, cancellable_stream):
-        return self.portal.wrap_async_context_manager(
-            self._wrap_context_async_stream(cancellable_stream)
-        )
+    def wrap_async_context_stream(self, method):
+        def result(*args, **kwargs):
+            with self.portal.wrap_async_context_manager(
+                self._wrap_context_async_stream(method, *args, **kwargs)
+            ) as sync_iterator:
+                try:
+                    yield from sync_iterator
+                except Exception as e:
+                    print("exception in sync iterator", e)
+                    raise
+                finally:
+                    print("closing sync iterator context manager")
+
+        return result
 
     def wrap_awaitable(self, method, *args, **kwargs):
         def result(*args, **kwargs):
@@ -68,5 +91,3 @@ def create_sync_client(host_name: str, port: int, name: str) -> Iterator[SyncCli
     with anyio.start_blocking_portal("asyncio") as portal:
         with portal.wrap_async_context_manager(connect(host_name, port, name)) as async_client:
             yield SyncClient(portal, async_client)
-
-

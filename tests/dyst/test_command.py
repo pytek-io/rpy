@@ -1,7 +1,7 @@
 import anyio
 import anyio.abc
 import pytest
-
+from typing import Optional
 from dyst import UserException, remote
 from tests.utils import (
     A_LITTLE_BIT_OF_TIME,
@@ -12,6 +12,9 @@ from tests.utils import (
 
 
 class RemoteObject:
+    ran_tasks: int
+    attribute: Optional[str]
+
     def __init__(self, server, attribute=None) -> None:
         self.server = server
         self.ran_tasks = 0
@@ -38,6 +41,13 @@ class RemoteObject:
 async def test_attribute():
     async with create_test_proxy_async_object(RemoteObject, args=("test",)) as proxy:
         assert "test" == await proxy.attribute
+
+
+@pytest.mark.anyio
+async def test_non_existent_attribute():
+    async with create_test_proxy_async_object(RemoteObject, args=("test",)) as proxy:
+        with pytest.raises(AttributeError):
+            await proxy.dummy
 
 
 @pytest.mark.anyio
