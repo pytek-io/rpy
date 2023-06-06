@@ -12,17 +12,19 @@ import asyncstdlib
 
 from .abc import Connection
 from .client_async import (
-    ASYNC_GENERATOR,
+    ASYNC_ITERATOR,
+    AWAITABLE,
     CANCELLED_TASK,
     CLOSE_SENTINEL,
-    COROUTINE,
     CREATE_OBJECT,
     EXCEPTION,
+    FUNCTION,
     GET_ATTRIBUTE,
+    ITER_ASYNC_ITERATOR,
     OK,
     USER_EXCEPTION,
 )
-from .common import scoped_insert, UserException
+from .common import UserException, scoped_insert
 from .connection import TCPConnection
 
 
@@ -38,22 +40,23 @@ class ClientSession:
         self.connection = connection
         self.running_tasks = {}
         self.objects = {}
+        self.pending_async_generators = {}
 
     def __str__(self) -> str:
         return self.name
 
-    async def send(self, code: str, request_id: int, args: Tuple[Any, ...]):
-        await self.connection.send((code, request_id, args))
+    async def send(self, code: str, request_id: int, status: str, value: Any):
+        await self.connection.send((code, request_id, status, value))
 
     async def cancellable_task(self, request_id, task_type, coroutine_or_async_context):
         code, result = CLOSE_SENTINEL, None
         try:
-            if task_type == ASYNC_GENERATOR:
+            if asyncio.iscoroutine(coroutine_or_async_context):
+                code, result = AWAITABLE, await coroutine_or_async_context
+            else:
                 async with asyncstdlib.scoped_iter(coroutine_or_async_context) as aiter:
                     async for value in aiter:
-                        await self.send(task_type, request_id, (OK, value))
-            else:
-                code, result = OK, await coroutine_or_async_context
+                        await self.send(task_type, request_id, OK, value)
 
         except anyio.get_cancelled_exc_class():
             code = CANCELLED_TASK
@@ -64,7 +67,7 @@ class ClientSession:
             code, result = EXCEPTION, traceback.format_exc()
         finally:
             with anyio.CancelScope(shield=True):
-                await self.send(task_type, request_id, (code, result))
+                await self.send(task_type, request_id, code, result)
 
     async def cancellable_task_runner(self, request_id, task_type, coroutine_or_async_context):
         try:
@@ -85,43 +88,61 @@ class ClientSession:
                 self.objects[object_id] = object_class(self.server, *args, **kwarg)
             except Exception:
                 code, message = EXCEPTION, traceback.format_exc()
-            await self.send(CREATE_OBJECT, request_id, (code, message))
+            await self.send(CREATE_OBJECT, request_id, code, message)
         else:
             self.objects.pop(object_id, None)
 
     async def get_attribute(self, request_id, object_id, name):
         code, message = OK, None
         try:
-            message = getattr(self.objects[object_id], name)
+            await self.send(
+                GET_ATTRIBUTE, request_id, OK, getattr(self.objects[object_id], name)
+            )
         except Exception as e:
             code, message = EXCEPTION, e
-        await self.send(GET_ATTRIBUTE, request_id, (code, message))
+        await self.send(CREATE_OBJECT, request_id, code, message)
 
     async def process_messages(self):
         async for code, request_id, payload in self.connection:
-            if code in (COROUTINE, ASYNC_GENERATOR):
-                if payload:
-                    object_id, command, args, kwargs = payload
-                    coroutine_or_async_context = getattr(self.objects[object_id], command)(
-                        *args, **kwargs
-                    )
+            try:
+                if code in (FUNCTION, AWAITABLE, ASYNC_ITERATOR):
+                    if payload is None:
+                        request_task_group = self.running_tasks.get(request_id)
+                        if request_task_group:
+                            request_task_group.cancel_scope.cancel()
+                    else:
+                        object_id, function, args, kwargs = payload
+                        coroutine_or_async_context = function(
+                            self.objects[object_id], *args, **kwargs
+                        )
+                        if code != FUNCTION or asyncio.iscoroutine(coroutine_or_async_context):
+                            self.task_group.start_soon(
+                                self.cancellable_task_runner,
+                                request_id,
+                                code,
+                                coroutine_or_async_context,
+                            )
+                        else:
+                            self.pending_async_generators[request_id] = coroutine_or_async_context
+                            await self.send(code, request_id, ASYNC_ITERATOR, request_id)
+                elif code == ITER_ASYNC_ITERATOR:
                     self.task_group.start_soon(
                         self.cancellable_task_runner,
                         request_id,
                         code,
-                        coroutine_or_async_context,
+                        self.pending_async_generators.pop(payload),
                     )
+                elif code == GET_ATTRIBUTE:
+                    await self.get_attribute(request_id, *payload)
+                elif code == CREATE_OBJECT:
+                    await self.create_object(request_id, *payload)
                 else:
-                    request_task_group = self.running_tasks.get(request_id)
-                    if request_task_group:
-                        logging.info(f"{self.name} cancelling task {request_id}")
-                        request_task_group.cancel_scope.cancel()
-            elif code == GET_ATTRIBUTE:
-                await self.get_attribute(request_id, *payload)
-            elif code == CREATE_OBJECT:
-                await self.create_object(request_id, *payload)
-            else:
-                raise Exception(f"Unknown code {code} with payload {payload}")
+                    raise Exception(f"Unknown code {repr(code)} with payload {repr(payload)}")
+            except anyio.get_cancelled_exc_class():
+                raise
+            except Exception:
+                stack = traceback.format_exc()
+                await self.send(code, request_id, EXCEPTION, stack)
 
     async def aclose(self):
         self.task_group.cancel_scope.cancel()
@@ -149,7 +170,6 @@ class SessionManager:
             raise
         except Exception as e:
             traceback.print_exc()
-            raise
             raise Exception(f"Internal error: {e}") from e
         finally:
             logging.info(f"{client_name} disconnected")

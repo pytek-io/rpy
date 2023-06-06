@@ -2,7 +2,7 @@ import contextlib
 import struct
 from asyncio.streams import IncompleteReadError, StreamReader, StreamWriter, open_connection
 from pickle import dumps, loads
-from typing import Any, Tuple
+from typing import Any, Tuple, Callable
 
 import asyncstdlib
 
@@ -24,14 +24,17 @@ class TCPConnection(Connection):
     ):
         self.reader = reader
         self.writer = writer
-        self.serialize = serialize
-        self.deserialize = deserialize
+        self.serialize: Callable = serialize
+        self.deserialize: Callable = deserialize
         self.throw_on_eof = throw_on_eof
         self._closing = False
 
-    async def send(self, message: Tuple[Any, ...]):
+    def send_nowait(self, message: Tuple[Any, ...]):
         message_as_bytes = self.serialize(message)
         self.writer.write(struct.pack(FORMAT, len(message_as_bytes)) + message_as_bytes)
+
+    async def send(self, message: Tuple[Any, ...]):
+        self.send_nowait(message)
         await self.writer.drain()
 
     async def __anext__(self):

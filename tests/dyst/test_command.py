@@ -1,35 +1,29 @@
 import anyio
 import anyio.abc
 import pytest
-from typing import Optional
-from dyst import UserException, remote
+from dyst import UserException
 from tests.utils import (
     A_LITTLE_BIT_OF_TIME,
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
     create_test_proxy_async_object,
+    create_test_proxy_sync_object,
 )
 
 
 class RemoteObject:
-    ran_tasks: int
-    attribute: Optional[str]
-
     def __init__(self, server, attribute=None) -> None:
         self.server = server
-        self.ran_tasks = 0
         self.attribute = attribute
+        self.ran_tasks = 0
 
-    @remote
     async def echo(self, message: str):
         await anyio.sleep(A_LITTLE_BIT_OF_TIME)
         return message
 
-    @remote
     async def throw_exception(self, exception):
         raise exception
 
-    @remote
     async def sleep_forever(self):
         try:
             await anyio.sleep_forever()
@@ -39,8 +33,15 @@ class RemoteObject:
 
 @pytest.mark.anyio
 async def test_attribute():
-    async with create_test_proxy_async_object(RemoteObject, args=("test",)) as proxy:
-        assert "test" == await proxy.attribute
+    value = "test"
+    async with create_test_proxy_async_object(RemoteObject, args=(value,)) as proxy:
+        assert await proxy.attribute == value
+
+
+def test_attribute_sync():
+    value = "test"
+    with create_test_proxy_sync_object(RemoteObject, args=(value,)) as proxy:
+        assert proxy.attribute == value
 
 
 @pytest.mark.anyio
@@ -51,7 +52,7 @@ async def test_non_existent_attribute():
 
 
 @pytest.mark.anyio
-async def test_command_echo():
+async def test_coroutine():
     async with create_test_proxy_async_object(RemoteObject) as proxy:
         value = "test"
         returned_value = await proxy.echo(value)
@@ -59,8 +60,16 @@ async def test_command_echo():
         assert returned_value == value
 
 
+def test_coroutine_sync():
+    with create_test_proxy_sync_object(RemoteObject) as proxy:
+        value = "test"
+        returned_value = proxy.echo(value)
+        assert returned_value is not value
+        assert returned_value == value
+
+
 @pytest.mark.anyio
-async def test_command_exception():
+async def test_coroutine_exception():
     async with create_test_proxy_async_object(RemoteObject) as proxy:
         with pytest.raises(UserException) as e_info:
             await proxy.throw_exception(UserException(ERROR_MESSAGE))
@@ -68,7 +77,7 @@ async def test_command_exception():
 
 
 @pytest.mark.anyio
-async def test_command_cancellation():
+async def test_coroutine_cancellation():
     async with create_test_proxy_async_object(RemoteObject) as proxy:
         async with anyio.create_task_group() as task_group:
 
@@ -84,7 +93,7 @@ async def test_command_cancellation():
 
 
 @pytest.mark.anyio
-async def test_command_time_out():
+async def test_coroutine_time_out():
     async with create_test_proxy_async_object(RemoteObject) as proxy:
         async with anyio.create_task_group():
             with anyio.move_on_after(1):

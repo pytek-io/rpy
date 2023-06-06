@@ -21,6 +21,9 @@ class TestConnection(dyst.abc.Connection):
         self.stream = stream
         self._closed = anyio.Event()
 
+    def send_nowait(self, message: Tuple[Any, ...]):
+        return self.sink.send_nowait(dumps(message))
+
     async def send(self, message):
         try:
             await self.sink.send(dumps(message))

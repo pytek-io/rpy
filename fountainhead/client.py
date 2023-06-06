@@ -10,8 +10,6 @@ from dyst import (
     PubSubManager,
     create_sync_client as create_sync_client_dyst,
     connect,
-    remote,
-    remote_iter,
 )
 
 from .storage import Storage
@@ -37,7 +35,6 @@ class ClientSession:
         print("Client created.", server)
         self.server: "Server" = server
 
-    @remote
     async def write_event(
         self,
         topic: str,
@@ -54,7 +51,6 @@ class ClientSession:
     async def read_event(self, topic: str, time_stamp: datetime):
         return await self.server.storage.read(topic, str(time_stamp.timestamp()))
 
-    @remote_iter
     async def read_events(
         self,
         topic: str,
