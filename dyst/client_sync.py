@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 from typing import Iterator
 
@@ -6,7 +7,14 @@ import janus
 
 from dyst import CLOSE_STREAM, EXCEPTION, OK
 
-from .client_async import ASYNC_ITERATOR, AWAITABLE, FUNCTION, AsyncClient, connect
+from .client_async import (
+    ASYNC_ITERATOR,
+    AWAITABLE,
+    FUNCTION,
+    SERVER_OBJECT_ID,
+    AsyncClient,
+    connect,
+)
 
 
 class SyncClient:
@@ -18,7 +26,7 @@ class SyncClient:
     async def remote_async_iterate(self, iterator_id):
         queue = janus.Queue()
 
-        async def forwarding_task():
+        async def forward_to_main_thread():
             try:
                 async for value in self.async_client.iter_async_generator(iterator_id):
                     await queue.async_q.put((OK, value))
@@ -28,8 +36,6 @@ class SyncClient:
                 await queue.async_q.put((EXCEPTION, e))
             finally:
                 await queue.async_q.put((CLOSE_STREAM, None))
-                if not task_group.cancel_scope.cancel_called:
-                    task_group.cancel_scope.cancel()
 
         def result_sync_iterator():
             while True:
@@ -42,9 +48,11 @@ class SyncClient:
                     raise message
                 yield message
 
-        async with anyio.create_task_group() as task_group:
-            task_group.start_soon(forwarding_task)
+        try:
+            task = asyncio.create_task(forward_to_main_thread())
             yield result_sync_iterator()
+        finally:
+            task.cancel()
 
     def sync_generator(self, iterator_id: int):
         with self.portal.wrap_async_context_manager(
@@ -74,6 +82,9 @@ class SyncClient:
             return self.portal.call(method, *args, **kwargs)
 
         return result
+
+    def fetch_remote_object(self, object_id: int = SERVER_OBJECT_ID):
+        return self.portal.call(self.async_client.fetch_remote_object, object_id, self)
 
 
 @contextlib.contextmanager

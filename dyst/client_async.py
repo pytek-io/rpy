@@ -21,6 +21,8 @@ CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
 USER_EXCEPTION = "UserException"
 CREATE_OBJECT = "Create object"
+DELETE_OBJECT = "Delete object"
+FETCH_OBJECT = "Fetch object"
 GET_ATTRIBUTE = "Get attribute"
 ASYNC_ITERATOR = "Async iterator"
 AWAITABLE = "Awaitable"
@@ -28,6 +30,7 @@ FUNCTION = "Function"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
 STREAM_BUFFER = 100
 
+SERVER_OBJECT_ID = 0
 
 class Result(AsyncIterable):
     def __init__(self, client, object_id: int, function: Callable, args, kwargs):
@@ -66,6 +69,12 @@ def decode_result(code, result, include_code=True):
         raise Exception(f"Unexpected code {code} received.")
 
 
+class RemoteObject:
+    def __init__(self, client, object_id: int):
+        self.client = client
+        self.object_id = object_id
+
+
 class AsyncClient:
     """Implements non functional specific details."""
 
@@ -77,6 +86,7 @@ class AsyncClient:
         self.object_id = count()
         self.pending_requests = {}
         self.current_streams = {}
+        self.remote_objects = {}
 
     async def send(self, *args):
         await self.connection.send(args)
@@ -90,7 +100,7 @@ class AsyncClient:
         await self.send(self.name)
         task_status.started()
         async for code, message_id, status, result in self.connection:
-            if code in (FUNCTION, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT):
+            if code in (FUNCTION, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT):
                 future = self.pending_requests.get(message_id)
                 if future:
                     future.set_result((status, result))
@@ -167,36 +177,47 @@ class AsyncClient:
     async def create_remote_object(
         self, object_class, args=(), kwarg={}, sync_client: Optional["SyncClient"] = None
     ):
-        object_id = next(self.object_id)
-        await self.manage_request(CREATE_OBJECT, (object_id, object_class, args, kwarg))
+        object_id = await self.manage_request(
+            CREATE_OBJECT, (object_class, args, kwarg), include_code=False
+        )
         try:
+            yield await self.fetch_remote_object(object_id, sync_client)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self.send(DELETE_OBJECT, 0, object_id)
+
+    async def fetch_remote_object(
+        self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional["SyncClient"] = None
+    ) -> Any:
+        if object_id not in self.remote_objects:
+            object_class = await self.manage_request(
+                FETCH_OBJECT, object_id, include_code=False
+            )
             __getattr__ = partial(self.get_attribute, object_id)
             if sync_client:
                 __getattr__ = sync_client.wrap_awaitable(__getattr__)
             object_class = type(
                 f"{object_class.__name__}Proxy",
-                (object_class,),
+                (RemoteObject, object_class),
                 {"__getattr__": __getattr__},
             )
             remote_object = object_class.__new__(object_class)
-            remote_object.client = self
-            remote_object.object_id = object_id
-            for name, attribute in (
-                (name, getattr(object_class, name)) for name in dir(object_class)
-            ):
+            RemoteObject.__init__(remote_object, self, object_id)
+            for name in dir(object_class):
+                if name.startswith("__") and name.endswith("__"):
+                    continue
+                attribute = getattr(object_class, name)
                 if inspect.isfunction(attribute):
                     method = partial(self.remote_method, object_id, attribute)
                     if sync_client:
                         method = sync_client.wrap_function(object_id, attribute)
                     setattr(remote_object, name, method)
-            yield remote_object
-        finally:
-            with anyio.CancelScope(shield=True):
-                await self.send(CREATE_OBJECT, 0, (object_id, None, None, None))
+            self.remote_objects[object_id] = remote_object
+        return self.remote_objects[object_id]
 
 
 @contextlib.asynccontextmanager
-async def _create_async_client_core(
+async def _create_async_client(
     task_group, connection: Connection, name: str
 ) -> AsyncIterator[AsyncClient]:
     client = AsyncClient(task_group, connection, name=name)
@@ -208,5 +229,5 @@ async def _create_async_client_core(
 async def connect(host_name: str, port: int, name: str) -> AsyncIterator[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with connect_to_tcp_server(host_name, port) as connection:
-            async with _create_async_client_core(task_group, connection, name) as client:
+            async with _create_async_client(task_group, connection, name) as client:
                 yield client

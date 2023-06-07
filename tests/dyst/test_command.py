@@ -6,14 +6,13 @@ from tests.utils import (
     A_LITTLE_BIT_OF_TIME,
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
-    create_test_proxy_async_object,
-    create_test_proxy_sync_object,
+    create_proxy_object_async,
+    create_proxy_object_sync
 )
 
 
 class RemoteObject:
-    def __init__(self, server, attribute=None) -> None:
-        self.server = server
+    def __init__(self, attribute=None) -> None:
         self.attribute = attribute
         self.ran_tasks = 0
 
@@ -32,28 +31,38 @@ class RemoteObject:
 
 
 @pytest.mark.anyio
+async def test_connection():
+    async with create_proxy_object_async(RemoteObject(None)) as proxy:
+        assert await proxy.echo("test") == "test"
+
+
+@pytest.mark.anyio
 async def test_attribute():
     value = "test"
-    async with create_test_proxy_async_object(RemoteObject, args=(value,)) as proxy:
-        assert await proxy.attribute == value
+    async with create_proxy_object_async(RemoteObject(value)) as proxy:
+        returned_value = await proxy.attribute
+        assert returned_value is not value
+        assert returned_value == value
 
 
 def test_attribute_sync():
     value = "test"
-    with create_test_proxy_sync_object(RemoteObject, args=(value,)) as proxy:
-        assert proxy.attribute == value
+    with create_proxy_object_sync(RemoteObject(value)) as proxy:
+        returned_value = proxy.attribute
+        assert returned_value is not value
+        assert returned_value == value
 
 
 @pytest.mark.anyio
 async def test_non_existent_attribute():
-    async with create_test_proxy_async_object(RemoteObject, args=("test",)) as proxy:
+    async with create_proxy_object_async(RemoteObject("test",)) as proxy:
         with pytest.raises(AttributeError):
             await proxy.dummy
 
 
 @pytest.mark.anyio
 async def test_coroutine():
-    async with create_test_proxy_async_object(RemoteObject) as proxy:
+    async with create_proxy_object_async(RemoteObject()) as proxy:
         value = "test"
         returned_value = await proxy.echo(value)
         assert returned_value is not value
@@ -61,7 +70,7 @@ async def test_coroutine():
 
 
 def test_coroutine_sync():
-    with create_test_proxy_sync_object(RemoteObject) as proxy:
+    with create_proxy_object_sync(RemoteObject()) as proxy:
         value = "test"
         returned_value = proxy.echo(value)
         assert returned_value is not value
@@ -70,7 +79,7 @@ def test_coroutine_sync():
 
 @pytest.mark.anyio
 async def test_coroutine_exception():
-    async with create_test_proxy_async_object(RemoteObject) as proxy:
+    async with create_proxy_object_async(RemoteObject()) as proxy:
         with pytest.raises(UserException) as e_info:
             await proxy.throw_exception(UserException(ERROR_MESSAGE))
         assert e_info.value.args[0] == ERROR_MESSAGE
@@ -78,7 +87,7 @@ async def test_coroutine_exception():
 
 @pytest.mark.anyio
 async def test_coroutine_cancellation():
-    async with create_test_proxy_async_object(RemoteObject) as proxy:
+    async with create_proxy_object_async(RemoteObject()) as proxy:
         async with anyio.create_task_group() as task_group:
 
             async def cancellable_task(task_status: anyio.abc.TaskStatus):
@@ -94,7 +103,7 @@ async def test_coroutine_cancellation():
 
 @pytest.mark.anyio
 async def test_coroutine_time_out():
-    async with create_test_proxy_async_object(RemoteObject) as proxy:
+    async with create_proxy_object_async(RemoteObject()) as proxy:
         async with anyio.create_task_group():
             with anyio.move_on_after(1):
                 await proxy.sleep_forever()

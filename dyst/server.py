@@ -4,7 +4,8 @@ import logging
 import signal
 import sys
 import traceback
-from typing import Any, Tuple
+from itertools import count
+from typing import Any
 
 import anyio
 import anyio.abc
@@ -23,6 +24,8 @@ from .client_async import (
     ITER_ASYNC_ITERATOR,
     OK,
     USER_EXCEPTION,
+    FETCH_OBJECT,
+    DELETE_OBJECT,
 )
 from .common import UserException, scoped_insert
 from .connection import TCPConnection
@@ -34,13 +37,13 @@ if sys.version_info < (3, 10):
 
 class ClientSession:
     def __init__(self, server, task_group, name, connection: Connection) -> None:
-        self.server = server
+        self.session_manager: "SessionManager" = server
         self.task_group = task_group
         self.name = name
         self.connection = connection
         self.running_tasks = {}
-        self.objects = {}
         self.pending_async_generators = {}
+        self.own_objects = set()
 
     def __str__(self) -> str:
         return self.name
@@ -81,22 +84,33 @@ class ClientSession:
         finally:
             self.running_tasks.pop(request_id, None)
 
-    async def create_object(self, request_id, object_id, object_class, args, kwarg):
-        code, message = OK, None
-        if object_class:
-            try:
-                self.objects[object_id] = object_class(self.server, *args, **kwarg)
-            except Exception:
-                code, message = EXCEPTION, traceback.format_exc()
-            await self.send(CREATE_OBJECT, request_id, code, message)
+    async def create_object(self, request_id, object_class, args, kwarg):
+        object_id = next(self.session_manager.object_id)
+        code, message = OK, object_id
+        try:
+            self.session_manager.objects[object_id] = object_class(
+                self.session_manager.server_object, *args, **kwarg
+            )
+            self.own_objects.add(object_id)
+        except Exception:
+            code, message = EXCEPTION, traceback.format_exc()
+        await self.send(CREATE_OBJECT, request_id, code, message)
+
+    async def fetch_object(self, request_id, object_id):
+        maybe_object = self.session_manager.objects.get(object_id)
+        if maybe_object is not None:
+            await self.send(FETCH_OBJECT, request_id, OK, maybe_object.__class__)
         else:
-            self.objects.pop(object_id, None)
+            await self.send(FETCH_OBJECT, request_id, EXCEPTION, f"Object {object_id} not found")
 
     async def get_attribute(self, request_id, object_id, name):
         code, message = OK, None
         try:
             await self.send(
-                GET_ATTRIBUTE, request_id, OK, getattr(self.objects[object_id], name)
+                GET_ATTRIBUTE,
+                request_id,
+                OK,
+                getattr(self.session_manager.objects[object_id], name),
             )
         except Exception as e:
             code, message = EXCEPTION, e
@@ -113,7 +127,7 @@ class ClientSession:
                     else:
                         object_id, function, args, kwargs = payload
                         coroutine_or_async_context = function(
-                            self.objects[object_id], *args, **kwargs
+                            self.session_manager.objects[object_id], *args, **kwargs
                         )
                         if code != FUNCTION or asyncio.iscoroutine(coroutine_or_async_context):
                             self.task_group.start_soon(
@@ -136,6 +150,11 @@ class ClientSession:
                     await self.get_attribute(request_id, *payload)
                 elif code == CREATE_OBJECT:
                     await self.create_object(request_id, *payload)
+                elif code == FETCH_OBJECT:
+                    await self.fetch_object(request_id, payload)
+                elif code == DELETE_OBJECT:
+                    self.session_manager.objects.pop(payload, None)
+                    self.own_objects.discard(payload)
                 else:
                     raise Exception(f"Unknown code {repr(code)} with payload {repr(payload)}")
             except anyio.get_cancelled_exc_class():
@@ -146,12 +165,16 @@ class ClientSession:
 
     async def aclose(self):
         self.task_group.cancel_scope.cancel()
+        for object_id in self.own_objects:
+            self.session_manager.objects.pop(object_id, None)
 
 
 class SessionManager:
-    def __init__(self, server: Any) -> None:
-        self.sessions = {}
-        self.server = server
+    def __init__(self, server_object: Any) -> None:
+        self.server_object = server_object
+        self.client_sessions = {}
+        self.object_id = count()
+        self.objects = {next(self.object_id): server_object}
 
     @contextlib.asynccontextmanager
     async def on_new_connection(self, connection: Connection):
@@ -160,12 +183,10 @@ class SessionManager:
             (client_name,) = await anext(connection)
             logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                connection_session = ClientSession(
-                    self.server, task_group, client_name, connection
-                )
-                with scoped_insert(self.sessions, client_name, connection_session):
-                    async with asyncstdlib.closing(connection_session):
-                        yield connection_session
+                client_session = ClientSession(self, task_group, client_name, connection)
+                with scoped_insert(self.client_sessions, client_name, client_session):
+                    async with asyncstdlib.closing(client_session):
+                        yield client_session
         except anyio.get_cancelled_exc_class():
             raise
         except Exception as e:
@@ -187,8 +208,8 @@ async def signal_handler(scope: anyio.abc.CancelScope):
             return
 
 
-async def _serve_tcp(port, server):
-    session_manager = SessionManager(server)
+async def _serve_tcp(port: int, server_object: Any):
+    session_manager = SessionManager(server_object)
 
     async def on_new_connection_raw(reader, writer):
         async with session_manager.on_new_connection(
@@ -206,5 +227,5 @@ async def handle_signals(main, *args, **kwargs):
         task_group.start_soon(main, *args, **kwargs)
 
 
-async def start_tcp_server(port, server):
-    await handle_signals(_serve_tcp, port, server)
+async def start_tcp_server(port: int, server_object: Any):
+    await handle_signals(_serve_tcp, port, server_object)

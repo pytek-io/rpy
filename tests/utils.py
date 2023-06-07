@@ -6,7 +6,7 @@ import anyio
 import anyio.abc
 
 import dyst.abc
-from dyst import AsyncClient, SessionManager, SyncClient, _create_async_client_core
+from dyst import AsyncClient, SessionManager, SyncClient, _create_async_client
 
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
@@ -57,31 +57,32 @@ def create_test_connection(
 
 @contextlib.asynccontextmanager
 async def create_test_async_clients(
-    server, nb_clients: int = 1
+    server_object, nb_clients: int = 1
 ) -> AsyncIterator[List[AsyncClient]]:
     clients = []
+    session_manager = SessionManager(server_object)
     async with anyio.create_task_group() as task_group:
         async with contextlib.AsyncExitStack() as exit_stack:
             for i in range(nb_clients):
                 client_name = f"client_{i}"
                 first, second = create_test_connection(client_name, "server")
                 client = await exit_stack.enter_async_context(
-                    _create_async_client_core(task_group, first, name=client_name)
+                    _create_async_client(task_group, first, name=client_name)
                 )
-                client_session_core = await exit_stack.enter_async_context(
-                    server.on_new_connection(second)
+                client_session = await exit_stack.enter_async_context(
+                    session_manager.on_new_connection(second)
                 )
-                task_group.start_soon(client_session_core.process_messages)
+                task_group.start_soon(client_session.process_messages)
                 clients.append(client)
             yield clients
             task_group.cancel_scope.cancel()
 
 
 @contextlib.contextmanager
-def create_test_sync_clients(server, nb_clients: int = 1) -> Iterator[List[SyncClient]]:
+def create_test_sync_clients(server_object, nb_clients: int = 1) -> Iterator[List[SyncClient]]:
     with anyio.start_blocking_portal("asyncio") as portal:
         with portal.wrap_async_context_manager(
-            create_test_async_clients(SessionManager(server), nb_clients)
+            create_test_async_clients(server_object, nb_clients)
         ) as async_clients:
             yield [SyncClient(portal, client) for client in async_clients]
 
@@ -90,13 +91,25 @@ def create_test_sync_clients(server, nb_clients: int = 1) -> Iterator[List[SyncC
 async def create_test_proxy_async_object(
     remote_object_class, server=None, args=()
 ) -> AsyncIterator[Any]:
-    async with create_test_async_clients(SessionManager(server), nb_clients=1) as (client,):
+    async with create_test_async_clients(server, nb_clients=1) as (client,):
         async with client.create_remote_object(remote_object_class, args, {}) as proxy:
             yield proxy
 
 
+@contextlib.asynccontextmanager
+async def create_proxy_object_async(remote_object, server=None, args=()) -> AsyncIterator[Any]:
+    async with create_test_async_clients(remote_object, nb_clients=1) as (client,):
+        yield await client.fetch_remote_object(0)
+
+
+@contextlib.contextmanager
+def create_proxy_object_sync(remote_object, server=None, args=()) -> Iterator[Any]:
+    with create_test_sync_clients(remote_object, nb_clients=1) as (client,):
+        yield client.fetch_remote_object(0)
+
+
 @contextlib.contextmanager
 def create_test_proxy_sync_object(remote_object_class, server=None, args=()) -> Iterator[Any]:
-    with create_test_sync_clients(SessionManager(server), nb_clients=1) as (client,):
+    with create_test_sync_clients(server, nb_clients=1) as (client,):
         with client.create_remote_object(remote_object_class, args, {}) as proxy:
             yield proxy
