@@ -1,5 +1,7 @@
+import asyncio
 import contextlib
 import traceback
+from typing import Coroutine
 
 
 @contextlib.contextmanager
@@ -28,6 +30,18 @@ def scoped_iter(iterable):
         yield iterable
     finally:
         iterable.close()
+
+
+closing_scope = scoped_iter
+
+
+@contextlib.contextmanager
+def scoped_execute_coroutine(coroutine: Coroutine):
+    task = asyncio.create_task(coroutine)
+    try:
+        yield task
+    finally:
+        task.cancel()
 
 
 class UserException(Exception):

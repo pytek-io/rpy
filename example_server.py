@@ -3,7 +3,7 @@ import logging
 import anyio.abc
 import anyio
 from dyst import start_tcp_server
-from fountainhead.client import Server
+from fountainhead.server import Server
 
 
 if __name__ == "__main__":

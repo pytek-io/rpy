@@ -15,7 +15,7 @@ from .client_async import (
     AsyncClient,
     connect,
 )
-
+from .common import scoped_execute_coroutine
 
 class SyncClient:
     def __init__(self, portal, async_client) -> None:
@@ -48,11 +48,8 @@ class SyncClient:
                     raise message
                 yield message
 
-        try:
-            task = asyncio.create_task(forward_to_main_thread())
+        with scoped_execute_coroutine(forward_to_main_thread()):
             yield result_sync_iterator()
-        finally:
-            task.cancel()
 
     def sync_generator(self, iterator_id: int):
         with self.portal.wrap_async_context_manager(
@@ -88,7 +85,7 @@ class SyncClient:
 
 
 @contextlib.contextmanager
-def create_sync_client(host_name: str, port: int, name: str) -> Iterator[SyncClient]:
+def create_sync_client(host_name: str, port: int) -> Iterator[SyncClient]:
     with anyio.start_blocking_portal("asyncio") as portal:
-        with portal.wrap_async_context_manager(connect(host_name, port, name)) as async_client:
+        with portal.wrap_async_context_manager(connect(host_name, port)) as async_client:
             yield SyncClient(portal, async_client)

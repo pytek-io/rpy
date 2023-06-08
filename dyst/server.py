@@ -36,17 +36,13 @@ if sys.version_info < (3, 10):
 
 
 class ClientSession:
-    def __init__(self, server, task_group, name, connection: Connection) -> None:
+    def __init__(self, server, task_group, connection: Connection) -> None:
         self.session_manager: "SessionManager" = server
         self.task_group = task_group
-        self.name = name
         self.connection = connection
         self.running_tasks = {}
         self.pending_async_generators = {}
         self.own_objects = set()
-
-    def __str__(self) -> str:
-        return self.name
 
     async def send(self, code: str, request_id: int, status: str, value: Any):
         await self.connection.send((code, request_id, status, value))
@@ -180,10 +176,8 @@ class SessionManager:
     async def on_new_connection(self, connection: Connection):
         client_name = "unknown"
         try:
-            (client_name,) = await anext(connection)
-            logging.info(f"{client_name} connected")
             async with anyio.create_task_group() as task_group:
-                client_session = ClientSession(self, task_group, client_name, connection)
+                client_session = ClientSession(self, task_group, connection)
                 with scoped_insert(self.client_sessions, client_name, client_session):
                     async with asyncstdlib.closing(client_session):
                         yield client_session

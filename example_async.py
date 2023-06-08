@@ -7,7 +7,7 @@ from pickle import dumps, loads
 import anyio
 from asyncstdlib import scoped_iter
 
-from fountainhead import ClientSession, create_async_client
+from fountainhead import create_async_client
 
 
 async def write_events(client, topic):
@@ -17,7 +17,7 @@ async def write_events(client, topic):
         logging.info(f"Saved {topic} event at {time_stamp}")
 
 
-async def subscribe_to_events(client: ClientSession, topic: str):
+async def subscribe_to_events(client, topic: str):
     start = datetime.now() - timedelta(minutes=100)
     async with scoped_iter(client.read_events(topic, start, None, False)) as events:
         async for time_stamp, content in events:
@@ -25,7 +25,7 @@ async def subscribe_to_events(client: ClientSession, topic: str):
 
 
 async def main_async(args):
-    async with create_async_client(args.host, args.port, "client") as client:
+    async with create_async_client(args.host, args.port) as client:
         async with anyio.create_task_group() as task_group:
             for i in range(1):
                 topic = f"uploads/client_{i}"

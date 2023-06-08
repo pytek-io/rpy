@@ -67,7 +67,7 @@ async def create_test_async_clients(
                 client_name = f"client_{i}"
                 first, second = create_test_connection(client_name, "server")
                 client = await exit_stack.enter_async_context(
-                    _create_async_client(task_group, first, name=client_name)
+                    _create_async_client(task_group, first)
                 )
                 client_session = await exit_stack.enter_async_context(
                     session_manager.on_new_connection(second)
@@ -88,28 +88,56 @@ def create_test_sync_clients(server_object, nb_clients: int = 1) -> Iterator[Lis
 
 
 @contextlib.asynccontextmanager
-async def create_test_proxy_async_object(
-    remote_object_class, server=None, args=()
-) -> AsyncIterator[Any]:
-    async with create_test_async_clients(server, nb_clients=1) as (client,):
-        async with client.create_remote_object(remote_object_class, args, {}) as proxy:
-            yield proxy
-
-
-@contextlib.asynccontextmanager
-async def create_proxy_object_async(remote_object, server=None, args=()) -> AsyncIterator[Any]:
+async def create_proxy_object_async(remote_object) -> AsyncIterator[Any]:
     async with create_test_async_clients(remote_object, nb_clients=1) as (client,):
         yield await client.fetch_remote_object(0)
 
 
 @contextlib.contextmanager
-def create_proxy_object_sync(remote_object, server=None, args=()) -> Iterator[Any]:
+def create_proxy_object_sync(remote_object) -> Iterator[Any]:
     with create_test_sync_clients(remote_object, nb_clients=1) as (client,):
         yield client.fetch_remote_object(0)
 
 
 @contextlib.contextmanager
-def create_test_proxy_sync_object(remote_object_class, server=None, args=()) -> Iterator[Any]:
+def create_test_proxy_object_sync(remote_object_class, server=None, args=()) -> Iterator[Any]:
     with create_test_sync_clients(server, nb_clients=1) as (client,):
         with client.create_remote_object(remote_object_class, args, {}) as proxy:
             yield proxy
+
+
+class RemoteObject:
+    def __init__(self, attribute=None) -> None:
+        self.attribute = attribute
+        self.ran_tasks = 0
+        self.current_value = 0
+        self.finally_called = False
+
+    async def echo(self, message: str):
+        await anyio.sleep(A_LITTLE_BIT_OF_TIME)
+        return message
+
+    async def throw_exception(self, exception):
+        raise exception
+
+    async def sleep_forever(self):
+        try:
+            await anyio.sleep_forever()
+        finally:
+            self.ran_tasks += 1
+
+    async def count(self, bound: int) -> AsyncIterator[int]:
+        try:
+            for i in range(bound):
+                await anyio.sleep(A_LITTLE_BIT_OF_TIME)
+                self.current_value = i
+                yield i
+        finally:
+            self.finally_called = True
+
+    async def generator_exception(self, exception) -> AsyncIterator[int]:
+        for i in range(10):
+            await anyio.sleep(A_LITTLE_BIT_OF_TIME)
+            yield i
+            if i == 3:
+                raise exception

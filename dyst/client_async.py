@@ -10,7 +10,7 @@ import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .common import UserException, scoped_insert
+from .common import UserException, scoped_insert, scoped_execute_coroutine, closing_scope
 from .connection import connect_to_tcp_server
 
 
@@ -31,6 +31,7 @@ ITER_ASYNC_ITERATOR = "Iter async iterator"
 STREAM_BUFFER = 100
 
 SERVER_OBJECT_ID = 0
+
 
 class Result(AsyncIterable):
     def __init__(self, client, object_id: int, function: Callable, args, kwargs):
@@ -76,28 +77,32 @@ class RemoteObject:
 
 
 class AsyncClient:
-    """Implements non functional specific details."""
-
-    def __init__(self, task_group, connection: Connection, name=None) -> None:
+    def __init__(self, task_group, connection: Connection) -> None:
         self.task_group = task_group
         self.connection = connection
-        self.name = name
         self.request_id = count()
         self.object_id = count()
         self.pending_requests = {}
         self.current_streams = {}
         self.remote_objects = {}
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     async def send(self, *args):
+        if self.closed:
+            raise RuntimeError("Client closed.")
         await self.connection.send(args)
 
     def send_nowait(self, *args):
+        if self.closed:
+            raise RuntimeError("Client closed.")
         self.connection.send_nowait(args)
 
     async def process_messages_from_server(
         self, task_status: TaskStatus = anyio.TASK_STATUS_IGNORED
     ):
-        await self.send(self.name)
         task_status.started()
         async for code, message_id, status, result in self.connection:
             if code in (FUNCTION, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT):
@@ -190,9 +195,7 @@ class AsyncClient:
         self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional["SyncClient"] = None
     ) -> Any:
         if object_id not in self.remote_objects:
-            object_class = await self.manage_request(
-                FETCH_OBJECT, object_id, include_code=False
-            )
+            object_class = await self.manage_request(FETCH_OBJECT, object_id, include_code=False)
             __getattr__ = partial(self.get_attribute, object_id)
             if sync_client:
                 __getattr__ = sync_client.wrap_awaitable(__getattr__)
@@ -217,17 +220,15 @@ class AsyncClient:
 
 
 @contextlib.asynccontextmanager
-async def _create_async_client(
-    task_group, connection: Connection, name: str
-) -> AsyncIterator[AsyncClient]:
-    client = AsyncClient(task_group, connection, name=name)
-    await task_group.start(client.process_messages_from_server)
-    yield client
+async def _create_async_client(task_group, connection: Connection) -> AsyncIterator[AsyncClient]:
+    with closing_scope(AsyncClient(task_group, connection)) as client:
+        with scoped_execute_coroutine(client.process_messages_from_server()):
+            yield client
 
 
 @contextlib.asynccontextmanager
-async def connect(host_name: str, port: int, name: str) -> AsyncIterator[AsyncClient]:
+async def connect(host_name: str, port: int) -> AsyncIterator[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with connect_to_tcp_server(host_name, port) as connection:
-            async with _create_async_client(task_group, connection, name) as client:
+            async with _create_async_client(task_group, connection) as client:
                 yield client
