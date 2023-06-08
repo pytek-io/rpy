@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator, Optional, Iterator
 
 import asyncstdlib
 
-import dyst
+import rpy
 from .storage import Storage
 
 
@@ -18,7 +18,7 @@ def load_time_stamp_and_value(time_stamp_and_value):
 class Server:
     def __init__(self, event_folder) -> None:
         self.storage = Storage(event_folder)
-        self.pub_sub_manager = dyst.PubSubManager()
+        self.pub_sub_manager = rpy.PubSubManager()
 
     async def write_event(
         self,
@@ -60,11 +60,11 @@ class Server:
 
 @contextlib.asynccontextmanager
 async def create_async_client(host_name: str, port: int) -> AsyncIterator[Server]:
-    async with dyst.connect(host_name, port) as client:
+    async with rpy.connect(host_name, port) as client:
         yield await client.fetch_remote_object()
 
 
 @contextlib.contextmanager
 def create_sync_client(host_name: str, port: int) -> Iterator[Server]:
-    with dyst.create_sync_client(host_name, port) as client:
+    with rpy.create_sync_client(host_name, port) as client:
         yield client.fetch_remote_object()

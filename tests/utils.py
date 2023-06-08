@@ -5,8 +5,8 @@ from typing import Any, AsyncIterator, Iterator, List, Tuple
 import anyio
 import anyio.abc
 
-import dyst.abc
-from dyst import AsyncClient, SessionManager, SyncClient, _create_async_client
+import rpy.abc
+from rpy import AsyncClient, SessionManager, SyncClient, _create_async_client
 
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
@@ -14,7 +14,7 @@ A_LITTLE_BIT_OF_TIME = 0.1
 ERROR_MESSAGE = "an error occured"
 
 
-class TestConnection(dyst.abc.Connection):
+class TestConnection(rpy.abc.Connection):
     def __init__(self, sink, stream, name: str) -> None:
         self.name: str = name
         self.sink = sink

@@ -1,7 +1,7 @@
 import pytest
 from tests.utils_sync import scoped_iter, enumerate, sleep
 
-from dyst import UserException
+from rpy import UserException
 from tests.utils import (
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
