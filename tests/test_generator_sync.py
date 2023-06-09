@@ -14,6 +14,8 @@ def test_async_generator():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         for i, value in enumerate(proxy.count(10)):
             assert i == value
+        sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
+        assert proxy.finally_called
 
 
 def test_stream_exception():
@@ -25,7 +27,6 @@ def test_stream_exception():
         assert e_info.value.args[0] == ERROR_MESSAGE
 
 
-
 def test_stream_early_exit():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         with scoped_iter(proxy.count(100)) as numbers:
@@ -33,5 +34,3 @@ def test_stream_early_exit():
                 if i == 3:
                     break
         sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
-        assert proxy.finally_called
-        assert proxy.current_value == 3

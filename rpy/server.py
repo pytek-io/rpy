@@ -1,8 +1,6 @@
 import asyncio
 import contextlib
-import logging
 import signal
-import sys
 import traceback
 from itertools import count
 from typing import Any
@@ -27,12 +25,14 @@ from .client_async import (
     FETCH_OBJECT,
     DELETE_OBJECT,
 )
-from .common import UserException, scoped_insert
+from .common import (
+    UserException,
+    scoped_insert,
+    print_error_stack,
+    scoped_execute_coroutine,
+    scoped_execute_coroutine_new,
+)
 from .connection import TCPConnection
-
-
-if sys.version_info < (3, 10):
-    from asyncstdlib import anext
 
 
 class ClientSession:
@@ -47,13 +47,18 @@ class ClientSession:
     async def send(self, code: str, request_id: int, status: str, value: Any):
         await self.connection.send((code, request_id, status, value))
 
-    async def cancellable_task(self, request_id, task_type, coroutine_or_async_context):
+    def send_nowait(self, code: str, request_id: int, status: str, value: Any):
+        self.connection.send_nowait((code, request_id, status, value))
+
+    async def evaluate_coroutine_or_async_generator(
+        self, request_id, task_type, coroutine_or_async_generator
+    ):
         code, result = CLOSE_SENTINEL, None
         try:
-            if asyncio.iscoroutine(coroutine_or_async_context):
-                code, result = AWAITABLE, await coroutine_or_async_context
+            if asyncio.iscoroutine(coroutine_or_async_generator):
+                code, result = AWAITABLE, await coroutine_or_async_generator
             else:
-                async with asyncstdlib.scoped_iter(coroutine_or_async_context) as aiter:
+                async with asyncstdlib.scoped_iter(coroutine_or_async_generator) as aiter:
                     async for value in aiter:
                         await self.send(task_type, request_id, OK, value)
 
@@ -64,19 +69,20 @@ class ClientSession:
             code, result = USER_EXCEPTION, e.args[0]
         except Exception:
             code, result = EXCEPTION, traceback.format_exc()
+            raise
         finally:
             with anyio.CancelScope(shield=True):
                 await self.send(task_type, request_id, code, result)
 
-    async def cancellable_task_runner(self, request_id, task_type, coroutine_or_async_context):
+    async def run_task(self, request_id, task_type, coroutine_or_async_context):
         try:
-            async with anyio.create_task_group() as self.running_tasks[request_id]:
-                self.running_tasks[request_id].start_soon(
-                    self.cancellable_task,
-                    request_id,
-                    task_type,
-                    coroutine_or_async_context,
-                )
+            async with scoped_execute_coroutine_new(
+                self.evaluate_coroutine_or_async_generator,
+                request_id,
+                task_type,
+                coroutine_or_async_context,
+            ) as self.running_tasks[request_id]:
+                pass
         finally:
             self.running_tasks.pop(request_id, None)
 
@@ -102,24 +108,21 @@ class ClientSession:
     async def get_attribute(self, request_id, object_id, name):
         code, message = OK, None
         try:
-            await self.send(
-                GET_ATTRIBUTE,
-                request_id,
-                OK,
-                getattr(self.session_manager.objects[object_id], name),
-            )
+            value = getattr(self.session_manager.objects[object_id], name)
+            await self.send(GET_ATTRIBUTE, request_id, OK, value)
         except Exception as e:
             code, message = EXCEPTION, e
-        await self.send(CREATE_OBJECT, request_id, code, message)
+        await self.send(GET_ATTRIBUTE, request_id, code, message)
 
     async def process_messages(self):
         async for code, request_id, payload in self.connection:
             try:
                 if code in (FUNCTION, AWAITABLE, ASYNC_ITERATOR):
                     if payload is None:
-                        request_task_group = self.running_tasks.get(request_id)
-                        if request_task_group:
-                            request_task_group.cancel_scope.cancel()
+                        running_task = self.running_tasks.get(request_id)
+                        if running_task:
+                            running_task()
+                            await running_task
                     else:
                         object_id, function, args, kwargs = payload
                         coroutine_or_async_context = function(
@@ -127,7 +130,7 @@ class ClientSession:
                         )
                         if code != FUNCTION or asyncio.iscoroutine(coroutine_or_async_context):
                             self.task_group.start_soon(
-                                self.cancellable_task_runner,
+                                self.run_task,
                                 request_id,
                                 code,
                                 coroutine_or_async_context,
@@ -137,7 +140,7 @@ class ClientSession:
                             await self.send(code, request_id, ASYNC_ITERATOR, request_id)
                 elif code == ITER_ASYNC_ITERATOR:
                     self.task_group.start_soon(
-                        self.cancellable_task_runner,
+                        self.run_task,
                         request_id,
                         code,
                         self.pending_async_generators.pop(payload),
@@ -169,25 +172,20 @@ class SessionManager:
     def __init__(self, server_object: Any) -> None:
         self.server_object = server_object
         self.client_sessions = {}
+        self.client_session_id = count()
         self.object_id = count()
         self.objects = {next(self.object_id): server_object}
 
     @contextlib.asynccontextmanager
     async def on_new_connection(self, connection: Connection):
-        client_name = "unknown"
-        try:
+        with print_error_stack():
             async with anyio.create_task_group() as task_group:
                 client_session = ClientSession(self, task_group, connection)
-                with scoped_insert(self.client_sessions, client_name, client_session):
+                with scoped_insert(
+                    self.client_sessions, next(self.client_session_id), client_session
+                ):
                     async with asyncstdlib.closing(client_session):
                         yield client_session
-        except anyio.get_cancelled_exc_class():
-            raise
-        except Exception as e:
-            traceback.print_exc()
-            raise Exception(f"Internal error: {e}") from e
-        finally:
-            logging.info(f"{client_name} disconnected")
 
 
 async def signal_handler(scope: anyio.abc.CancelScope):

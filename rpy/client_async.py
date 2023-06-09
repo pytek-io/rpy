@@ -10,7 +10,7 @@ import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .common import UserException, scoped_insert, scoped_execute_coroutine, closing_scope
+from .common import UserException, closing_scope, scoped_execute_coroutine, scoped_insert
 from .connection import connect_to_tcp_server
 
 
@@ -28,7 +28,7 @@ ASYNC_ITERATOR = "Async iterator"
 AWAITABLE = "Awaitable"
 FUNCTION = "Function"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
-STREAM_BUFFER = 100
+STREAM_BUFFER_SIZE = 100
 
 SERVER_OBJECT_ID = 0
 
@@ -43,7 +43,7 @@ class Result(AsyncIterable):
 
     def __await__(self):
         return asyncio.create_task(
-            self.client.manage_request(
+            self.client.send_request(
                 AWAITABLE,
                 (self.object_id, self.function, self.args, self.kwargs),
                 is_cancellable=True,
@@ -83,7 +83,7 @@ class AsyncClient:
         self.request_id = count()
         self.object_id = count()
         self.pending_requests = {}
-        self.current_streams = {}
+        self.async_generators_streams = {}
         self.remote_objects = {}
         self.closed = False
 
@@ -110,9 +110,12 @@ class AsyncClient:
                 if future:
                     future.set_result((status, result))
             elif code in (ASYNC_ITERATOR, ITER_ASYNC_ITERATOR):
-                sink = self.current_streams.get(message_id)
+                sink = self.async_generators_streams.get(message_id)
                 if sink:
-                    sink.send_nowait((status, result))
+                    try:
+                        sink.send_nowait((status, result))
+                    except anyio.WouldBlock as e:
+                        sink.close()
             else:
                 print(f"Unexpected code {code} received.")
 
@@ -130,23 +133,24 @@ class AsyncClient:
                         self.send_nowait(code, request_id, None)
                 raise
 
-    async def manage_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
+    async def send_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
         with self.create_request(code, args, is_cancellable) as future:
             return decode_result(*(await future), include_code=include_code)
 
     async def get_attribute(self, object_id: int, name: str):
-        return await self.manage_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
+        return await self.send_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
 
     def remote_method(self, object_id: int, function: Callable, *args, **kwargs) -> Any:
         return Result(self, object_id, function, args, kwargs)
 
     async def evaluate_async_generator(self, object_id, function, args, kwargs):
-        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER)
+        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
         stream_id = next(self.request_id)
-        with scoped_insert(self.current_streams, stream_id, sink):
+        with scoped_insert(self.async_generators_streams, stream_id, sink):
             await self.send(ASYNC_ITERATOR, stream_id, (object_id, function, args, kwargs))
             try:
                 async for code, value in stream:
+                    print("evaluate_async_generator received", code, value)
                     if code in (ASYNC_ITERATOR, OK):
                         yield value
                     elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
@@ -160,9 +164,9 @@ class AsyncClient:
                     await self.send(ASYNC_ITERATOR, stream_id, None)
 
     async def iter_async_generator(self, iterator_id: int):
-        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER)
+        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
         stream_id = next(self.request_id)
-        with scoped_insert(self.current_streams, stream_id, sink):
+        with scoped_insert(self.async_generators_streams, stream_id, sink):
             await self.send(ITER_ASYNC_ITERATOR, stream_id, iterator_id)
             try:
                 async for code, value in stream:
@@ -182,7 +186,7 @@ class AsyncClient:
     async def create_remote_object(
         self, object_class, args=(), kwarg={}, sync_client: Optional["SyncClient"] = None
     ):
-        object_id = await self.manage_request(
+        object_id = await self.send_request(
             CREATE_OBJECT, (object_class, args, kwarg), include_code=False
         )
         try:
@@ -195,7 +199,7 @@ class AsyncClient:
         self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional["SyncClient"] = None
     ) -> Any:
         if object_id not in self.remote_objects:
-            object_class = await self.manage_request(FETCH_OBJECT, object_id, include_code=False)
+            object_class = await self.send_request(FETCH_OBJECT, object_id, include_code=False)
             __getattr__ = partial(self.get_attribute, object_id)
             if sync_client:
                 __getattr__ = sync_client.wrap_awaitable(__getattr__)

@@ -12,7 +12,7 @@ from rpy import AsyncClient, SessionManager, SyncClient, _create_async_client
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
 ERROR_MESSAGE = "an error occured"
-
+TEST_CONNECTION_BUFFER_SIZE = 100
 
 class TestConnection(rpy.abc.Connection):
     def __init__(self, sink, stream, name: str) -> None:
@@ -48,8 +48,8 @@ class TestConnection(rpy.abc.Connection):
 def create_test_connection(
     first_name: str, second_name: str
 ) -> Tuple[TestConnection, TestConnection]:
-    first_sink, first_stream = anyio.create_memory_object_stream(100)
-    second_sink, second_stream = anyio.create_memory_object_stream(100)
+    first_sink, first_stream = anyio.create_memory_object_stream(TEST_CONNECTION_BUFFER_SIZE)
+    second_sink, second_stream = anyio.create_memory_object_stream(TEST_CONNECTION_BUFFER_SIZE)
     return TestConnection(first_sink, second_stream, first_name), TestConnection(
         second_sink, first_stream, second_name
     )
@@ -133,7 +133,13 @@ class RemoteObject:
                 self.current_value = i
                 yield i
         finally:
+            print("finally called")
             self.finally_called = True
+
+    async def count_nowait(self, bound: int) -> AsyncIterator[int]:
+        for i in range(bound):
+            print(i)
+            yield i
 
     async def generator_exception(self, exception) -> AsyncIterator[int]:
         for i in range(10):

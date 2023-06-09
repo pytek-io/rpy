@@ -1,17 +1,18 @@
 import asyncio
+import anyio
 import contextlib
 import traceback
 from typing import Coroutine
 
 
 @contextlib.contextmanager
-def print_error_stack(location):
+def print_error_stack():
     try:
         yield
+    except anyio.get_cancelled_exc_class():
+        raise
     except Exception:
         traceback.print_exc()
-        print(location)
-        print("=" * 20)
         raise
 
 
@@ -42,6 +43,12 @@ def scoped_execute_coroutine(coroutine: Coroutine):
         yield task
     finally:
         task.cancel()
+
+@contextlib.asynccontextmanager
+async def scoped_execute_coroutine_new(method, *args, **kwargs):
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(method, *args, **kwargs)
+        yield task_group.cancel_scope.cancel
 
 
 class UserException(Exception):

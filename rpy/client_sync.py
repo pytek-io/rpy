@@ -17,6 +17,7 @@ from .client_async import (
 )
 from .common import scoped_execute_coroutine
 
+
 class SyncClient:
     def __init__(self, portal, async_client) -> None:
         self.portal = portal
@@ -60,7 +61,7 @@ class SyncClient:
     def wrap_function(self, object_id, function):
         def result(*args, **kwargs):
             code, result = self.portal.call(
-                self.async_client.manage_request, FUNCTION, (object_id, function, args, kwargs)
+                self.async_client.send_request, FUNCTION, (object_id, function, args, kwargs)
             )
             if code == AWAITABLE:
                 return result
