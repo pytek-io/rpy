@@ -1,4 +1,4 @@
-from rpy import UserException
+from rmy import UserException
 import anyio
 import os
 from datetime import datetime

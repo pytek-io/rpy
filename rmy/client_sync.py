@@ -5,7 +5,7 @@ from typing import Iterator
 import anyio
 import janus
 
-from rpy import CLOSE_STREAM, EXCEPTION, OK
+from rmy import CLOSE_STREAM, EXCEPTION, OK
 
 from .client_async import (
     ASYNC_ITERATOR,

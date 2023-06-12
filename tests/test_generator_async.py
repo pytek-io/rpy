@@ -1,6 +1,6 @@
 import pytest
 
-from rpy import UserException
+from rmy import UserException
 from tests.utils import (
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,

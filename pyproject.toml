@@ -1,6 +1,6 @@
 
 [project]
-name = "rpy"
+name = "rmy"
 version = "1.0.0"
 license = {text = "GNU"}
 dynamic = ["readme"]
@@ -11,7 +11,7 @@ readme = {file = ["README.md"]}
 [tool.setuptools.packages.find]
 namespaces = false
 where = ["src"]
-include = ["*rpy*"]
+include = ["*rmy*"]
 
 [tool.black]
 line-length = 99
@@ -41,11 +41,11 @@ ignore_errors = true
 
 
 [tool.coverage.run]
-source = "rpy/*"
+source = "rmy/*"
 [tool.poetry]
-name = "rpy"
+name = "rmy"
 version = "0.1.0"
-description = "stateful rpc for Python"
+description = "Stateful rpc for Python"
 authors = ["fdv1 <francois@pytek.io>"]
 readme = "README.md"
 

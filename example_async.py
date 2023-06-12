@@ -8,7 +8,7 @@ import anyio
 from asyncstdlib import scoped_iter
 
 from fountainhead import create_async_client
-from rpy import cancel_task_group_on_signal
+from rmy import cancel_task_group_on_signal
 
 
 async def write_events(client, topic):

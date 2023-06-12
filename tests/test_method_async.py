@@ -1,5 +1,5 @@
 import pytest
-from rpy import UserException
+from rmy import UserException
 from tests.utils import (
     ERROR_MESSAGE,
     create_proxy_object_async,
