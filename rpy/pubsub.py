@@ -1,33 +1,15 @@
-import contextlib
-import logging
 from collections import defaultdict
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
-import anyio
-import anyio.abc
-
-
-SUBSCRIPTION_BUFFER_SIZE = 100
+import mpmc
 
 
 class PubSubManager:
     def __init__(self):
-        self.subscriptions: Dict[str, Set] = defaultdict(set)
+        self.subscriptions: Dict[str, mpmc.Broadcast] = defaultdict(mpmc.Broadcast)
 
-    @contextlib.contextmanager
-    def subscribe(self, topic: Any):
-        sink, stream = anyio.create_memory_object_stream(SUBSCRIPTION_BUFFER_SIZE)
-        subscriptions = self.subscriptions[topic]
-        try:
-            subscriptions.add(sink)
-            yield stream
-        finally:
-            if sink in subscriptions:
-                subscriptions.remove(sink)
+    def broadcast_to_subscriptions(self, topic: str, message: Any):
+        self.subscriptions[topic].put_nowait(message)
 
-    def broadcast_to_subscriptions(self, topic: Any, message: Any):
-        for subscription in self.subscriptions[topic]:
-            try:
-                subscription.send_nowait(message)
-            except anyio.WouldBlock:
-                logging.warning("ignoring subscriber which is too far behind")
+    def subscribe(self, topic: str) -> mpmc.Broadcast:
+        return self.subscriptions[topic]

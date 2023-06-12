@@ -138,7 +138,7 @@ class RemoteObject:
 
     async def count_nowait(self, bound: int) -> AsyncIterator[int]:
         for i in range(bound):
-            print(i)
+            print("producing", i)
             yield i
 
     async def generator_exception(self, exception) -> AsyncIterator[int]:

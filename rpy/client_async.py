@@ -28,7 +28,7 @@ ASYNC_ITERATOR = "Async iterator"
 AWAITABLE = "Awaitable"
 FUNCTION = "Function"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
-STREAM_BUFFER_SIZE = 100
+STREAM_BUFFER_SIZE = 10
 
 SERVER_OBJECT_ID = 0
 
@@ -109,7 +109,7 @@ class AsyncClient:
                 future = self.pending_requests.get(message_id)
                 if future:
                     future.set_result((status, result))
-            elif code in (ASYNC_ITERATOR, ITER_ASYNC_ITERATOR):
+            elif code == ITER_ASYNC_ITERATOR:
                 sink = self.async_generators_streams.get(message_id)
                 if sink:
                     try:
@@ -144,24 +144,14 @@ class AsyncClient:
         return Result(self, object_id, function, args, kwargs)
 
     async def evaluate_async_generator(self, object_id, function, args, kwargs):
-        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
-        stream_id = next(self.request_id)
-        with scoped_insert(self.async_generators_streams, stream_id, sink):
-            await self.send(ASYNC_ITERATOR, stream_id, (object_id, function, args, kwargs))
-            try:
-                async for code, value in stream:
-                    print("evaluate_async_generator received", code, value)
-                    if code in (ASYNC_ITERATOR, OK):
-                        yield value
-                    elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
-                        break
-                    elif code == USER_EXCEPTION:
-                        raise UserException(value)
-                    else:
-                        raise Exception(value)
-            finally:
-                with anyio.CancelScope(shield=True):
-                    await self.send(ASYNC_ITERATOR, stream_id, None)
+        iterator_id = await self.send_request(
+            FUNCTION,
+            (object_id, function, args, kwargs),
+            is_cancellable=True,
+            include_code=False,
+        )
+        async for value in self.iter_async_generator(iterator_id):
+            yield value
 
     async def iter_async_generator(self, iterator_id: int):
         sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
@@ -178,6 +168,8 @@ class AsyncClient:
                         raise UserException(value)
                     else:
                         raise Exception(value)
+            except Exception as e:
+                print(e)
             finally:
                 with anyio.CancelScope(shield=True):
                     await self.send(ASYNC_ITERATOR, stream_id, None)

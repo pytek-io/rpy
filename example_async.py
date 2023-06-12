@@ -8,6 +8,7 @@ import anyio
 from asyncstdlib import scoped_iter
 
 from fountainhead import create_async_client
+from rpy import cancel_task_group_on_signal
 
 
 async def write_events(client, topic):
@@ -27,6 +28,7 @@ async def subscribe_to_events(client, topic: str):
 async def main_async(args):
     async with create_async_client(args.host, args.port) as client:
         async with anyio.create_task_group() as task_group:
+            task_group.start_soon(cancel_task_group_on_signal, task_group)
             for i in range(1):
                 topic = f"uploads/client_{i}"
                 task_group.start_soon(write_events, client, topic)

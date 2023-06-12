@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import signal
 import traceback
 from itertools import count
 from typing import Any
@@ -16,21 +15,22 @@ from .client_async import (
     CANCELLED_TASK,
     CLOSE_SENTINEL,
     CREATE_OBJECT,
+    DELETE_OBJECT,
     EXCEPTION,
+    FETCH_OBJECT,
     FUNCTION,
     GET_ATTRIBUTE,
     ITER_ASYNC_ITERATOR,
     OK,
     USER_EXCEPTION,
-    FETCH_OBJECT,
-    DELETE_OBJECT,
 )
 from .common import (
     UserException,
-    scoped_insert,
+    cancel_task_group_on_signal,
     print_error_stack,
     scoped_execute_coroutine,
     scoped_execute_coroutine_new,
+    scoped_insert,
 )
 from .connection import TCPConnection
 
@@ -188,18 +188,6 @@ class SessionManager:
                         yield client_session
 
 
-async def signal_handler(scope: anyio.abc.CancelScope):
-    with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
-        async for signum in signals:
-            if signum == signal.SIGINT:
-                print("Ctrl+C pressed!")
-            else:
-                print("Terminated!")
-
-            scope.cancel()
-            return
-
-
 async def _serve_tcp(port: int, server_object: Any):
     session_manager = SessionManager(server_object)
 
@@ -215,7 +203,7 @@ async def _serve_tcp(port: int, server_object: Any):
 
 async def handle_signals(main, *args, **kwargs):
     async with anyio.create_task_group() as task_group:
-        task_group.start_soon(signal_handler, task_group.cancel_scope)
+        task_group.start_soon(cancel_task_group_on_signal, task_group)
         task_group.start_soon(main, *args, **kwargs)
 
 

@@ -1,6 +1,11 @@
 import contextlib
 import struct
-from asyncio.streams import IncompleteReadError, StreamReader, StreamWriter, open_connection
+from asyncio.streams import StreamReader, StreamWriter, open_connection
+import sys
+if sys.version_info < (3, 8):
+    from asyncio.streams import IncompleteReadError
+else:
+    from asyncio.exceptions import IncompleteReadError
 from pickle import dumps, loads
 from typing import Any, Tuple, Callable
 
@@ -35,7 +40,11 @@ class TCPConnection(Connection):
 
     async def send(self, message: Tuple[Any, ...]):
         self.send_nowait(message)
-        await self.writer.drain()
+        try:
+            await self.writer.drain()
+        except ConnectionResetError:
+            if self.throw_on_eof:
+                raise
 
     async def __anext__(self):
         try:
@@ -43,7 +52,7 @@ class TCPConnection(Connection):
             return self.deserialize(
                 await self.reader.readexactly(struct.unpack(FORMAT, length)[0])
             )
-        except (IncompleteReadError, ConnectionResetError):
+        except (IncompleteReadError, ConnectionResetError, BrokenPipeError):
             if self.throw_on_eof:
                 if not self._closing and self.reader.at_eof():
                     raise RuntimeError("Connection closed.")

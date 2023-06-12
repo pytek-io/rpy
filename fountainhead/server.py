@@ -43,19 +43,19 @@ class Server:
         end: Optional[datetime] = None,
         time_stamps_only: bool = False,
     ) -> AsyncIterator[Any]:
-        with self.pub_sub_manager.subscribe(topic) as subscription:
-            existing_tags = self.storage.list_topic(topic, start, end)
-            async for time_stamp in asyncstdlib.chain(existing_tags, subscription):
-                if end and datetime.now() > end:
-                    break
-                yield (
-                    time_stamp
-                    if time_stamps_only
-                    else (
-                        time_stamp,
-                        await self.read_event(topic, time_stamp),
-                    )
+        udpates = self.pub_sub_manager.subscribe(topic)
+        existing_tags = self.storage.list_topic(topic, start, end)
+        async for time_stamp in asyncstdlib.chain(existing_tags, udpates):
+            if end and datetime.now() > end:
+                break
+            yield (
+                time_stamp
+                if time_stamps_only
+                else (
+                    time_stamp,
+                    await self.read_event(topic, time_stamp),
                 )
+            )
 
 
 @contextlib.asynccontextmanager

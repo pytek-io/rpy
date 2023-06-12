@@ -1,8 +1,11 @@
 import asyncio
-import anyio
 import contextlib
+import signal
 import traceback
 from typing import Coroutine
+
+import anyio
+import anyio.abc
 
 
 @contextlib.contextmanager
@@ -55,3 +58,14 @@ class UserException(Exception):
     """Use this to signal expected errors to users."""
 
     pass
+
+async def cancel_task_group_on_signal(task_group: anyio.abc.TaskGroup):
+    with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
+        async for signum in signals:
+            if signum == signal.SIGINT:
+                print("Ctrl+C pressed!")
+            else:
+                print(f"Received signal {signum}, terminating.")
+
+            task_group.cancel_scope.cancel()
+            return
