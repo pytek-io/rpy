@@ -15,7 +15,7 @@ from .client_async import (
     AsyncClient,
     connect,
 )
-from .common import scoped_execute_coroutine
+from .common import cancel_task_on_exit
 
 
 class SyncClient:
@@ -49,7 +49,7 @@ class SyncClient:
                     raise message
                 yield message
 
-        with scoped_execute_coroutine(forward_to_main_thread()):
+        with cancel_task_on_exit(forward_to_main_thread()):
             yield result_sync_iterator()
 
     def sync_generator(self, iterator_id: int):
@@ -61,7 +61,7 @@ class SyncClient:
     def wrap_function(self, object_id, function):
         def result(*args, **kwargs):
             code, result = self.portal.call(
-                self.async_client.send_request, FUNCTION, (object_id, function, args, kwargs)
+                self.async_client.execute_request, FUNCTION, (object_id, function, args, kwargs)
             )
             if code == AWAITABLE:
                 return result

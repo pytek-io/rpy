@@ -40,24 +40,20 @@ closing_scope = scoped_iter
 
 
 @contextlib.contextmanager
-def scoped_execute_coroutine(coroutine: Coroutine):
+def cancel_task_on_exit(coroutine: Coroutine):
     task = asyncio.create_task(coroutine)
     try:
         yield task
     finally:
         task.cancel()
 
+
 @contextlib.asynccontextmanager
-async def scoped_execute_coroutine_new(method, *args, **kwargs):
+async def execute_cancellable_coroutine(method, *args, **kwargs):
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(method, *args, **kwargs)
-        yield task_group.cancel_scope.cancel
+        yield task_group.cancel_scope
 
-
-class UserException(Exception):
-    """Use this to signal expected errors to users."""
-
-    pass
 
 async def cancel_task_group_on_signal(task_group: anyio.abc.TaskGroup):
     with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
@@ -69,3 +65,9 @@ async def cancel_task_group_on_signal(task_group: anyio.abc.TaskGroup):
 
             task_group.cancel_scope.cancel()
             return
+
+
+class UserException(Exception):
+    """Use this to signal expected errors to users."""
+
+    pass

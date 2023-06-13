@@ -133,12 +133,10 @@ class RemoteObject:
                 self.current_value = i
                 yield i
         finally:
-            print("finally called")
             self.finally_called = True
 
     async def count_nowait(self, bound: int) -> AsyncIterator[int]:
         for i in range(bound):
-            print("producing", i)
             yield i
 
     async def generator_exception(self, exception) -> AsyncIterator[int]:

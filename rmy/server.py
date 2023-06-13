@@ -27,9 +27,9 @@ from .client_async import (
 from .common import (
     UserException,
     cancel_task_group_on_signal,
+    cancel_task_on_exit,
+    execute_cancellable_coroutine,
     print_error_stack,
-    scoped_execute_coroutine,
-    scoped_execute_coroutine_new,
     scoped_insert,
 )
 from .connection import TCPConnection
@@ -76,7 +76,7 @@ class ClientSession:
 
     async def run_task(self, request_id, task_type, coroutine_or_async_context):
         try:
-            async with scoped_execute_coroutine_new(
+            async with execute_cancellable_coroutine(
                 self.evaluate_coroutine_or_async_generator,
                 request_id,
                 task_type,
@@ -114,30 +114,32 @@ class ClientSession:
             code, message = EXCEPTION, e
         await self.send(GET_ATTRIBUTE, request_id, code, message)
 
+    async def cancel_running_task(self, request_id: int):
+        running_task = self.running_tasks.get(request_id)
+        if running_task:
+            running_task.cancel()
+            await running_task
+
     async def process_messages(self):
         async for code, request_id, payload in self.connection:
             try:
-                if code in (FUNCTION, AWAITABLE, ASYNC_ITERATOR):
-                    if payload is None:
-                        running_task = self.running_tasks.get(request_id)
-                        if running_task:
-                            running_task()
-                            await running_task
-                    else:
-                        object_id, function, args, kwargs = payload
-                        coroutine_or_async_context = function(
-                            self.session_manager.objects[object_id], *args, **kwargs
+                if code in (FUNCTION, AWAITABLE):
+                    object_id, function, args, kwargs = payload
+                    coroutine_or_async_context = function(
+                        self.session_manager.objects[object_id], *args, **kwargs
+                    )
+                    if code != FUNCTION or asyncio.iscoroutine(coroutine_or_async_context):
+                        self.task_group.start_soon(
+                            self.run_task,
+                            request_id,
+                            code,
+                            coroutine_or_async_context,
                         )
-                        if code != FUNCTION or asyncio.iscoroutine(coroutine_or_async_context):
-                            self.task_group.start_soon(
-                                self.run_task,
-                                request_id,
-                                code,
-                                coroutine_or_async_context,
-                            )
-                        else:
-                            self.pending_async_generators[request_id] = coroutine_or_async_context
-                            await self.send(code, request_id, ASYNC_ITERATOR, request_id)
+                    else:
+                        self.pending_async_generators[request_id] = coroutine_or_async_context
+                        await self.send(code, request_id, ASYNC_ITERATOR, request_id)
+                elif code == CANCELLED_TASK:
+                    await self.cancel_running_task(request_id)
                 elif code == ITER_ASYNC_ITERATOR:
                     self.task_group.start_soon(
                         self.run_task,

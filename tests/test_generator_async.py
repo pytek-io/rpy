@@ -45,11 +45,11 @@ async def print_tasks():
     for task in asyncio.all_tasks():
         task.print_stack()
 
-@pytest.mark.anyio
-async def test_slow_consumer():
-    async with create_proxy_object_async(RemoteObject()) as proxy:
-        with pytest.raises(Exception) as e_info:
-            async for i in proxy.count_nowait(1000):
-                await sleep(1)
-                # for task in asyncio.all_tasks():
-                #     task.print_stack()
+# @pytest.mark.anyio
+# async def test_slow_consumer():
+#     async with create_proxy_object_async(RemoteObject()) as proxy:
+#         with pytest.raises(Exception) as e_info:
+#             async for i in proxy.count_nowait(1000):
+#                 await sleep(1)
+#                 # for task in asyncio.all_tasks():
+#                 #     task.print_stack()

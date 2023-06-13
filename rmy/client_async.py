@@ -10,7 +10,7 @@ import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .common import UserException, closing_scope, scoped_execute_coroutine, scoped_insert
+from .common import UserException, cancel_task_on_exit, closing_scope, scoped_insert
 from .connection import connect_to_tcp_server
 
 
@@ -43,7 +43,7 @@ class Result(AsyncIterable):
 
     def __await__(self):
         return asyncio.create_task(
-            self.client.send_request(
+            self.client.execute_request(
                 AWAITABLE,
                 (self.object_id, self.function, self.args, self.kwargs),
                 is_cancellable=True,
@@ -58,6 +58,7 @@ class Result(AsyncIterable):
 
 
 def decode_result(code, result, include_code=True):
+    print(code, result)
     if code in (CANCELLED_TASK, OK, AWAITABLE, ASYNC_ITERATOR):
         return (code, result) if include_code else result
     if code == USER_EXCEPTION:
@@ -116,11 +117,13 @@ class AsyncClient:
                         sink.send_nowait((status, result))
                     except anyio.WouldBlock as e:
                         sink.close()
+            elif code == CANCELLED_TASK:
+                print("Task cancelled.", message_id, status, result)
             else:
                 print(f"Unexpected code {code} received.")
 
     @contextlib.contextmanager
-    def create_request(self, code, args, is_cancellable=False):
+    def submit_request(self, code, args, is_cancellable=False):
         request_id = next(self.request_id)
         future = asyncio.Future()
         with scoped_insert(self.pending_requests, request_id, future):
@@ -129,22 +132,25 @@ class AsyncClient:
                 yield future
             except anyio.get_cancelled_exc_class():
                 if is_cancellable:
-                    with anyio.CancelScope(shield=True):
-                        self.send_nowait(code, request_id, None)
+                    self.cancel_task(request_id)
                 raise
 
-    async def send_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
-        with self.create_request(code, args, is_cancellable) as future:
+    async def execute_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
+        with self.submit_request(code, args, is_cancellable) as future:
             return decode_result(*(await future), include_code=include_code)
 
     async def get_attribute(self, object_id: int, name: str):
-        return await self.send_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
+        return await self.execute_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
 
     def remote_method(self, object_id: int, function: Callable, *args, **kwargs) -> Any:
         return Result(self, object_id, function, args, kwargs)
 
+    def cancel_task(self, request_id: int):
+        self.send_nowait(CANCELLED_TASK, request_id, None)
+        self.pending_requests.pop(request_id, None)
+
     async def evaluate_async_generator(self, object_id, function, args, kwargs):
-        iterator_id = await self.send_request(
+        iterator_id = await self.execute_request(
             FUNCTION,
             (object_id, function, args, kwargs),
             is_cancellable=True,
@@ -155,9 +161,9 @@ class AsyncClient:
 
     async def iter_async_generator(self, iterator_id: int):
         sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
-        stream_id = next(self.request_id)
-        with scoped_insert(self.async_generators_streams, stream_id, sink):
-            await self.send(ITER_ASYNC_ITERATOR, stream_id, iterator_id)
+        request_id = next(self.request_id)
+        with scoped_insert(self.async_generators_streams, request_id, sink):
+            await self.send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
             try:
                 async for code, value in stream:
                     if code == OK:
@@ -168,17 +174,14 @@ class AsyncClient:
                         raise UserException(value)
                     else:
                         raise Exception(value)
-            except Exception as e:
-                print(e)
             finally:
-                with anyio.CancelScope(shield=True):
-                    await self.send(ASYNC_ITERATOR, stream_id, None)
+                self.cancel_task(request_id)
 
     @contextlib.asynccontextmanager
     async def create_remote_object(
         self, object_class, args=(), kwarg={}, sync_client: Optional["SyncClient"] = None
     ):
-        object_id = await self.send_request(
+        object_id = await self.execute_request(
             CREATE_OBJECT, (object_class, args, kwarg), include_code=False
         )
         try:
@@ -191,7 +194,7 @@ class AsyncClient:
         self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional["SyncClient"] = None
     ) -> Any:
         if object_id not in self.remote_objects:
-            object_class = await self.send_request(FETCH_OBJECT, object_id, include_code=False)
+            object_class = await self.execute_request(FETCH_OBJECT, object_id, include_code=False)
             __getattr__ = partial(self.get_attribute, object_id)
             if sync_client:
                 __getattr__ = sync_client.wrap_awaitable(__getattr__)
@@ -218,7 +221,7 @@ class AsyncClient:
 @contextlib.asynccontextmanager
 async def _create_async_client(task_group, connection: Connection) -> AsyncIterator[AsyncClient]:
     with closing_scope(AsyncClient(task_group, connection)) as client:
-        with scoped_execute_coroutine(client.process_messages_from_server()):
+        with cancel_task_on_exit(client.process_messages_from_server()):
             yield client
 
 

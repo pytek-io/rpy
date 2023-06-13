@@ -2,6 +2,7 @@ import contextlib
 import struct
 from asyncio.streams import StreamReader, StreamWriter, open_connection
 import sys
+
 if sys.version_info < (3, 8):
     from asyncio.streams import IncompleteReadError
 else:
