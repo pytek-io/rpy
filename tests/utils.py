@@ -14,6 +14,7 @@ A_LITTLE_BIT_OF_TIME = 0.1
 ERROR_MESSAGE = "an error occured"
 TEST_CONNECTION_BUFFER_SIZE = 100
 
+
 class TestConnection(rmy.abc.Connection):
     def __init__(self, sink, stream, name: str) -> None:
         self.name: str = name

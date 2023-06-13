@@ -51,7 +51,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.7, <4.0"
-anyio = "^3.6.2"
+anyio = "^3.7.0"
 janus = "^1.0.0"
 asyncstdlib = "^3.10.7"
 mpmc = "^0.1.0"

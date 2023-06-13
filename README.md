@@ -1,12 +1,8 @@
-A stored event queue solution for building event based systems easily. Fountainhead will essentially do two things store events sequentially by topic and notify any subscriber in real time. This is meant to be used as the unique source of truth feeding data to arbitrary number of dependant systems (database, datalake, monitoring dashboard, data cube, etc...) in highly reliable way.
-
-<img src="./General.svg">
-
-One can easily subscribe to those topics to process events starting from any point in time and receive new events from then onward. This allows any subscriber to catch up from where it previously stopped. It is safe by desgin thanks to its append only nature (think Git), although can still rewrite the past if need be.
+A powerful PRC framework to build distributed application easily in Python. 
 
 ## How to use it
 
-One can save events as follows.
+One can expose a Python object through a server as follow.
 
 ``` python
 with create_sync_client(server_host, server_port, name="producer") as client:

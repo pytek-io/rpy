@@ -40,10 +40,14 @@ async def test_stream_early_exit():
         assert await proxy.finally_called
         assert await proxy.current_value == 3
 
+
 import asyncio
+
+
 async def print_tasks():
     for task in asyncio.all_tasks():
         task.print_stack()
+
 
 # @pytest.mark.anyio
 # async def test_slow_consumer():
