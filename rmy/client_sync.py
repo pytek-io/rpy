@@ -1,16 +1,16 @@
-import asyncio
 import contextlib
 from typing import Iterator
 
 import anyio
 import janus
 
-from rmy import CLOSE_STREAM, EXCEPTION, OK
-
 from .client_async import (
     ASYNC_ITERATOR,
     AWAITABLE,
+    CLOSE_STREAM,
+    EXCEPTION,
     FUNCTION,
+    OK,
     SERVER_OBJECT_ID,
     AsyncClient,
     connect,

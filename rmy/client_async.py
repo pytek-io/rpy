@@ -58,7 +58,6 @@ class Result(AsyncIterable):
 
 
 def decode_result(code, result, include_code=True):
-    print(code, result)
     if code in (CANCELLED_TASK, OK, AWAITABLE, ASYNC_ITERATOR):
         return (code, result) if include_code else result
     if code == USER_EXCEPTION:

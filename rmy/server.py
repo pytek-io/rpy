@@ -211,3 +211,7 @@ async def handle_signals(main, *args, **kwargs):
 
 async def start_tcp_server(port: int, server_object: Any):
     await handle_signals(_serve_tcp, port, server_object)
+
+
+def run_tcp_server(port: int, server_object: Any):
+    anyio.run(start_tcp_server, port, server_object)
