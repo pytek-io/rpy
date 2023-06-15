@@ -1,3 +1,9 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from client_sync import SyncClient
+
 import asyncio
 import contextlib
 import inspect
@@ -24,6 +30,7 @@ CREATE_OBJECT = "Create object"
 DELETE_OBJECT = "Delete object"
 FETCH_OBJECT = "Fetch object"
 GET_ATTRIBUTE = "Get attribute"
+SET_ATTRIBUTE = "Set attribute"
 ASYNC_ITERATOR = "Async iterator"
 AWAITABLE = "Awaitable"
 FUNCTION = "Function"
@@ -32,6 +39,11 @@ STREAM_BUFFER_SIZE = 10
 
 SERVER_OBJECT_ID = 0
 
+ASYNC_SETATTR_ERROR_MESSAGE = "Cannot set attribute on remote object in async mode. Use setattr method instead. \
+We intentionally do not support setting attributes using assignment operator on remote objects in async mode. \
+This is because it is not a good practice not too wait until a remote operation completes."
+
+ASYNC_GENERATOR_NOT_OVERFLOWED = False
 
 class Result(AsyncIterable):
     def __init__(self, client, object_id: int, function: Callable, args, kwargs):
@@ -105,16 +117,24 @@ class AsyncClient:
     ):
         task_status.started()
         async for code, message_id, status, result in self.connection:
-            if code in (FUNCTION, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT):
+            if code in (
+                FUNCTION,
+                AWAITABLE,
+                GET_ATTRIBUTE,
+                CREATE_OBJECT,
+                FETCH_OBJECT,
+                SET_ATTRIBUTE,
+            ):
                 future = self.pending_requests.get(message_id)
                 if future:
                     future.set_result((status, result))
             elif code == ITER_ASYNC_ITERATOR:
-                sink = self.async_generators_streams.get(message_id)
-                if sink:
+                if sink_and_overflow_flag := self.async_generators_streams.get(message_id):
+                    sink = sink_and_overflow_flag[0]
                     try:
                         sink.send_nowait((status, result))
-                    except anyio.WouldBlock as e:
+                    except anyio.WouldBlock:
+                        sink_and_overflow_flag[1] = True
                         sink.close()
             elif code == CANCELLED_TASK:
                 print("Task cancelled.", message_id, status, result)
@@ -131,7 +151,7 @@ class AsyncClient:
                 yield future
             except anyio.get_cancelled_exc_class():
                 if is_cancellable:
-                    self.cancel_task(request_id)
+                    self.cancel_request_no_wait(request_id)
                 raise
 
     async def execute_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
@@ -141,12 +161,22 @@ class AsyncClient:
     async def get_attribute(self, object_id: int, name: str):
         return await self.execute_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
 
+    async def set_attribute(self, object_id: int, name: str, value: Any):
+        return await self.execute_request(
+            SET_ATTRIBUTE, (object_id, name, value), include_code=False
+        )
+
     def remote_method(self, object_id: int, function: Callable, *args, **kwargs) -> Any:
         return Result(self, object_id, function, args, kwargs)
 
-    def cancel_task(self, request_id: int):
+    def cancel_request_no_wait(self, request_id: int):
         self.send_nowait(CANCELLED_TASK, request_id, None)
         self.pending_requests.pop(request_id, None)
+
+    async def cancel_request(self, request_id: int):
+        self.send_nowait(CANCELLED_TASK, request_id, None)
+        self.pending_requests.pop(request_id, None)
+        await self.connection.drain()
 
     async def evaluate_async_generator(self, object_id, function, args, kwargs):
         iterator_id = await self.execute_request(
@@ -161,7 +191,8 @@ class AsyncClient:
     async def iter_async_generator(self, iterator_id: int):
         sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
         request_id = next(self.request_id)
-        with scoped_insert(self.async_generators_streams, request_id, sink):
+        sink_and_overflow_flag = [sink, ASYNC_GENERATOR_NOT_OVERFLOWED]
+        with scoped_insert(self.async_generators_streams, request_id, sink_and_overflow_flag):
             await self.send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
             try:
                 async for code, value in stream:
@@ -174,11 +205,13 @@ class AsyncClient:
                     else:
                         raise Exception(value)
             finally:
-                self.cancel_task(request_id)
-
+                await self.cancel_request(request_id)
+                if sink_and_overflow_flag[1]:
+                    raise OverflowError("Async generator overflowed.")
+                
     @contextlib.asynccontextmanager
     async def create_remote_object(
-        self, object_class, args=(), kwarg={}, sync_client: Optional["SyncClient"] = None
+        self, object_class, args=(), kwarg={}, sync_client: Optional[SyncClient] = None
     ):
         object_id = await self.execute_request(
             CREATE_OBJECT, (object_class, args, kwarg), include_code=False
@@ -190,20 +223,26 @@ class AsyncClient:
                 await self.send(DELETE_OBJECT, 0, object_id)
 
     async def fetch_remote_object(
-        self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional["SyncClient"] = None
+        self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional[SyncClient] = None
     ) -> Any:
         if object_id not in self.remote_objects:
             object_class = await self.execute_request(FETCH_OBJECT, object_id, include_code=False)
+            setattr = partial(self.set_attribute, object_id)
             __getattr__ = partial(self.get_attribute, object_id)
             if sync_client:
                 __getattr__ = sync_client.wrap_awaitable(__getattr__)
+                setattr = __setattr__ = sync_client.wrap_awaitable(setattr)
+            else:
+                def __setattr__(_self, _name, _value):
+                    raise AttributeError(ASYNC_SETATTR_ERROR_MESSAGE)
             object_class = type(
                 f"{object_class.__name__}Proxy",
                 (RemoteObject, object_class),
-                {"__getattr__": __getattr__},
+                {"__getattr__": __getattr__, "setattr": setattr, "__setattr__": __setattr__},
             )
             remote_object = object_class.__new__(object_class)
-            RemoteObject.__init__(remote_object, self, object_id)
+            object.__setattr__(remote_object, "client", self)
+            object.__setattr__(remote_object, "object_id", object_id)
             for name in dir(object_class):
                 if name.startswith("__") and name.endswith("__"):
                     continue
@@ -212,7 +251,7 @@ class AsyncClient:
                     method = partial(self.remote_method, object_id, attribute)
                     if sync_client:
                         method = sync_client.wrap_function(object_id, attribute)
-                    setattr(remote_object, name, method)
+                    object.__setattr__(remote_object, name, method)
             self.remote_objects[object_id] = remote_object
         return self.remote_objects[object_id]
 

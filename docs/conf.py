@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import sys
 
-from importlib.metadata import version as get_version
+if sys.version_info >= (3, 8):
+    from importlib.metadata import version as get_version
 
 from packaging.version import parse
 
@@ -18,9 +20,15 @@ project = "RMY"
 author = "Francois du Vignaud"
 copyright = "2023, " + author
 
-v = parse(get_version("rmy"))
-version = v.base_version
-release = v.public
+if sys.version_info >= (3, 8):
+    v = parse(get_version("rmy"))
+    version = v.base_version
+    release = v.public
+else:
+    import rmy
+
+    version = rmy.__version__
+    release = rmy.__version__
 
 language = "en"
 

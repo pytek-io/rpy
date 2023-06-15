@@ -163,3 +163,4 @@ issues.txt
 test.py
 poetry.lock
 .vscode/launch.json
+.python-version

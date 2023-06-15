@@ -1,12 +1,12 @@
 import pytest
 from rmy import UserException
 from tests.utils import (
-    ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
     create_proxy_object_sync,
     RemoteObject,
 )
 from tests.utils_sync import sleep
+
 
 
 def test_coroutine():

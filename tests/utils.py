@@ -4,6 +4,7 @@ from typing import Any, AsyncIterator, Iterator, List, Tuple
 
 import anyio
 import anyio.abc
+import anyio.lowlevel
 
 import rmy.abc
 from rmy import AsyncClient, SessionManager, SyncClient, _create_async_client
@@ -24,6 +25,9 @@ class TestConnection(rmy.abc.Connection):
 
     def send_nowait(self, message: Tuple[Any, ...]):
         return self.sink.send_nowait(dumps(message))
+
+    async def drain(self):
+        await anyio.lowlevel.checkpoint()
 
     async def send(self, message):
         try:
@@ -108,6 +112,7 @@ def create_test_proxy_object_sync(remote_object_class, server=None, args=()) -> 
 
 
 class RemoteObject:
+
     def __init__(self, attribute=None) -> None:
         self.attribute = attribute
         self.ran_tasks = 0

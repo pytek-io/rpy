@@ -12,3 +12,7 @@ class Connection(AsyncIterator[Any], metaclass=ABCMeta):
     @abstractmethod
     def send_nowait(self, message: Tuple[Any, ...]):
         ...
+
+    @abstractmethod
+    async def drain(self):
+        ...

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import contextlib
 import traceback
@@ -20,6 +21,7 @@ from .client_async import (
     FETCH_OBJECT,
     FUNCTION,
     GET_ATTRIBUTE,
+    SET_ATTRIBUTE,
     ITER_ASYNC_ITERATOR,
     OK,
     USER_EXCEPTION,
@@ -27,7 +29,6 @@ from .client_async import (
 from .common import (
     UserException,
     cancel_task_group_on_signal,
-    cancel_task_on_exit,
     execute_cancellable_coroutine,
     print_error_stack,
     scoped_insert,
@@ -37,7 +38,7 @@ from .connection import TCPConnection
 
 class ClientSession:
     def __init__(self, server, task_group, connection: Connection) -> None:
-        self.session_manager: "SessionManager" = server
+        self.session_manager: SessionManager = server
         self.task_group = task_group
         self.connection = connection
         self.running_tasks = {}
@@ -106,13 +107,20 @@ class ClientSession:
             await self.send(FETCH_OBJECT, request_id, EXCEPTION, f"Object {object_id} not found")
 
     async def get_attribute(self, request_id, object_id, name):
-        code, message = OK, None
+        code, value = OK, None
         try:
             value = getattr(self.session_manager.objects[object_id], name)
-            await self.send(GET_ATTRIBUTE, request_id, OK, value)
         except Exception as e:
-            code, message = EXCEPTION, e
-        await self.send(GET_ATTRIBUTE, request_id, code, message)
+            code, value = EXCEPTION, e
+        await self.send(GET_ATTRIBUTE, request_id, code, value)
+
+    async def set_attribute(self, request_id, object_id, name, value):
+        code, result = OK, None
+        try:
+            setattr(self.session_manager.objects[object_id], name, value)
+        except Exception as e:
+            code, result = EXCEPTION, e
+        await self.send(SET_ATTRIBUTE, request_id, code, result)
 
     async def cancel_running_task(self, request_id: int):
         running_task = self.running_tasks.get(request_id)
@@ -149,6 +157,8 @@ class ClientSession:
                     )
                 elif code == GET_ATTRIBUTE:
                     await self.get_attribute(request_id, *payload)
+                elif code == SET_ATTRIBUTE:
+                    await self.set_attribute(request_id, *payload)
                 elif code == CREATE_OBJECT:
                     await self.create_object(request_id, *payload)
                 elif code == FETCH_OBJECT:

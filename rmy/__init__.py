@@ -1,3 +1,5 @@
+__version__ = "0.1.0"
+
 from .client_async import AsyncClient, _create_async_client, connect
 from .client_sync import SyncClient, create_sync_client
 from .common import UserException, cancel_task_group_on_signal, scoped_insert, scoped_iter

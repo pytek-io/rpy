@@ -1,7 +1,6 @@
 import os
 import tokenize as std_tokenize
 
-
 _ASYNC_TO_SYNC = {
     "__aenter__": "__enter__",
     "__aexit__": "__exit__",
@@ -84,9 +83,12 @@ def main():
         filepath = f"test_{name}_async.py"
         with open(os.path.join(fromdir, filepath), "rb") as f:
             result = Unasync(additional_replacements={"_async": "_sync"}).unasync_content(f)
-        open(os.path.join(todir, f"test_{name}_sync.py"), "wb").write(
-            result.replace("@pytest.mark.anyio\n", "").encode("utf-8")
-        )
+        for value, replacement in [
+            ("""proxy.setattr("attribute", new_value)""", "proxy.attribute = new_value"),
+            ("pytestmark = pytest.mark.anyio\n", ""),
+        ]:
+            result = result.replace(value, replacement)
+        open(os.path.join(todir, f"test_{name}_sync.py"), "wb").write(result.encode("utf-8"))
 
 
 if __name__ == "__main__":

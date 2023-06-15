@@ -7,8 +7,9 @@ from tests.utils import (
 )
 from tests.utils_async import sleep
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
+
 async def test_coroutine():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         value = "test"
@@ -17,7 +18,6 @@ async def test_coroutine():
         assert returned_value == value
 
 
-@pytest.mark.anyio
 async def test_coroutine_exception():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         with pytest.raises(UserException) as e_info:

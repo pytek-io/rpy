@@ -39,6 +39,9 @@ class TCPConnection(Connection):
         message_as_bytes = self.serialize(message)
         self.writer.write(struct.pack(FORMAT, len(message_as_bytes)) + message_as_bytes)
 
+    async def drain(self):
+        await self.writer.drain()
+
     async def send(self, message: Tuple[Any, ...]):
         self.send_nowait(message)
         try:

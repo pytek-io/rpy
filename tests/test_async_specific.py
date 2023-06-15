@@ -9,8 +9,9 @@ from tests.utils import (
     RemoteObject,
 )
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
+
 async def test_stream_cancellation():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async with anyio.create_task_group():
@@ -22,7 +23,6 @@ async def test_stream_cancellation():
         assert await proxy.finally_called
 
 
-@pytest.mark.anyio
 async def test_coroutine_cancellation():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async with anyio.create_task_group() as task_group:
@@ -38,7 +38,6 @@ async def test_coroutine_cancellation():
         assert await proxy.ran_tasks == 1
 
 
-@pytest.mark.anyio
 async def test_coroutine_time_out():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async with anyio.create_task_group():
@@ -46,3 +45,10 @@ async def test_coroutine_time_out():
                 await proxy.sleep_forever()
         await sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS)
         assert await proxy.ran_tasks == 1
+
+
+async def test_set_attribute():
+    async with create_proxy_object_async(RemoteObject("test")) as proxy:
+        new_value = "new_value"
+        with pytest.raises(AttributeError):
+            proxy.attribute = new_value

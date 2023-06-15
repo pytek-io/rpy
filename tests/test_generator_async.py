@@ -9,15 +9,15 @@ from tests.utils import (
 )
 from tests.utils_async import enumerate, scoped_iter, sleep, sleep_forever
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
+
 async def test_async_generator():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async for i, value in enumerate(proxy.count(10)):
             assert i == value
 
 
-@pytest.mark.anyio
 async def test_stream_exception():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         with pytest.raises(Exception) as e_info:
@@ -29,7 +29,6 @@ async def test_stream_exception():
         assert e_info.value.args[0] == ERROR_MESSAGE
 
 
-@pytest.mark.anyio
 async def test_stream_early_exit():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async with scoped_iter(proxy.count(100)) as numbers:
@@ -49,11 +48,10 @@ async def print_tasks():
         task.print_stack()
 
 
-# @pytest.mark.anyio
-# async def test_slow_consumer():
-#     async with create_proxy_object_async(RemoteObject()) as proxy:
-#         with pytest.raises(Exception) as e_info:
-#             async for i in proxy.count_nowait(1000):
-#                 await sleep(1)
-#                 # for task in asyncio.all_tasks():
-#                 #     task.print_stack()
+async def test_async_iterator_overflow():
+    async with create_proxy_object_async(RemoteObject()) as proxy:
+        with pytest.raises(Exception) as e_info:
+            async for i in proxy.count_nowait(1000):
+                await sleep(1)
+                # for task in asyncio.all_tasks():
+                #     task.print_stack()
