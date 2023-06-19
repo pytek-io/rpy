@@ -16,3 +16,7 @@ class Connection(AsyncIterator[Any], metaclass=ABCMeta):
     @abstractmethod
     async def drain(self):
         ...
+
+    @abstractmethod
+    def close(self):
+        ...

@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
+
 
 if TYPE_CHECKING:
     from client_sync import SyncClient
@@ -16,7 +18,7 @@ import anyio
 from anyio.abc import TaskStatus
 
 from .abc import Connection
-from .common import UserException, cancel_task_on_exit, closing_scope, scoped_insert
+from .common import UserException, cancel_task_on_exit, scoped_insert, scoped_iter
 from .connection import connect_to_tcp_server
 
 
@@ -44,6 +46,8 @@ We intentionally do not support setting attributes using assignment operator on 
 This is because it is not a good practice not too wait until a remote operation completes."
 
 ASYNC_GENERATOR_NOT_OVERFLOWED = False
+ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
+
 
 class Result(AsyncIterable):
     def __init__(self, client, object_id: int, function: Callable, args, kwargs):
@@ -88,58 +92,65 @@ class RemoteObject:
         self.object_id = object_id
 
 
+class Value:
+    """Wrapper for a value that would be passed by copy preventing it from being accessed to by parts of the code."""
+
+    def __init__(self, content):
+        self.content = content
+
+    def __call__(self) -> Any:
+        return self.content
+
+    def set(self, value):
+        self.content = value
+
+
 class AsyncClient:
-    def __init__(self, task_group, connection: Connection) -> None:
-        self.task_group = task_group
+    def __init__(self, connection: Connection) -> None:
         self.connection = connection
         self.request_id = count()
         self.object_id = count()
         self.pending_requests = {}
         self.async_generators_streams = {}
         self.remote_objects = {}
-        self.closed = False
-
-    def close(self):
-        self.closed = True
 
     async def send(self, *args):
-        if self.closed:
-            raise RuntimeError("Client closed.")
         await self.connection.send(args)
 
     def send_nowait(self, *args):
-        if self.closed:
-            raise RuntimeError("Client closed.")
         self.connection.send_nowait(args)
 
     async def process_messages_from_server(
         self, task_status: TaskStatus = anyio.TASK_STATUS_IGNORED
     ):
         task_status.started()
-        async for code, message_id, status, result in self.connection:
-            if code in (
-                FUNCTION,
-                AWAITABLE,
-                GET_ATTRIBUTE,
-                CREATE_OBJECT,
-                FETCH_OBJECT,
-                SET_ATTRIBUTE,
-            ):
-                future = self.pending_requests.get(message_id)
-                if future:
-                    future.set_result((status, result))
-            elif code == ITER_ASYNC_ITERATOR:
-                if sink_and_overflow_flag := self.async_generators_streams.get(message_id):
-                    sink = sink_and_overflow_flag[0]
-                    try:
-                        sink.send_nowait((status, result))
-                    except anyio.WouldBlock:
-                        sink_and_overflow_flag[1] = True
-                        sink.close()
-            elif code == CANCELLED_TASK:
-                print("Task cancelled.", message_id, status, result)
-            else:
-                print(f"Unexpected code {code} received.")
+        try:
+            async for code, message_id, status, result in self.connection:
+                if code in (
+                    FUNCTION,
+                    AWAITABLE,
+                    GET_ATTRIBUTE,
+                    CREATE_OBJECT,
+                    FETCH_OBJECT,
+                    SET_ATTRIBUTE,
+                ):
+                    future = self.pending_requests.get(message_id)
+                    if future:
+                        future.set_result((status, result))
+                elif code == ITER_ASYNC_ITERATOR:
+                    if sink_and_overflow_flag := self.async_generators_streams.get(message_id):
+                        sink, overflow_flag = sink_and_overflow_flag
+                        try:
+                            sink.send_nowait((status, result))
+                        except anyio.WouldBlock:
+                            overflow_flag.set(True)
+                            sink.close()
+                elif code == CANCELLED_TASK:
+                    print("Task cancelled.", message_id, status, result)
+                else:
+                    print(f"Unexpected code {code} received.")
+        except Exception as e:
+            print(e)
 
     @contextlib.contextmanager
     def submit_request(self, code, args, is_cancellable=False):
@@ -191,8 +202,8 @@ class AsyncClient:
     async def iter_async_generator(self, iterator_id: int):
         sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
         request_id = next(self.request_id)
-        sink_and_overflow_flag = [sink, ASYNC_GENERATOR_NOT_OVERFLOWED]
-        with scoped_insert(self.async_generators_streams, request_id, sink_and_overflow_flag):
+        over_flow_flag = Value(ASYNC_GENERATOR_NOT_OVERFLOWED)
+        with scoped_insert(self.async_generators_streams, request_id, (sink, over_flow_flag)):
             await self.send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
             try:
                 async for code, value in stream:
@@ -206,9 +217,9 @@ class AsyncClient:
                         raise Exception(value)
             finally:
                 await self.cancel_request(request_id)
-                if sink_and_overflow_flag[1]:
-                    raise OverflowError("Async generator overflowed.")
-                
+                if over_flow_flag():
+                    raise OverflowError(ASYNC_GENERATOR_OVERFLOWED_MESSAGE)
+
     @contextlib.asynccontextmanager
     async def create_remote_object(
         self, object_class, args=(), kwarg={}, sync_client: Optional[SyncClient] = None
@@ -233,8 +244,10 @@ class AsyncClient:
                 __getattr__ = sync_client.wrap_awaitable(__getattr__)
                 setattr = __setattr__ = sync_client.wrap_awaitable(setattr)
             else:
+
                 def __setattr__(_self, _name, _value):
                     raise AttributeError(ASYNC_SETATTR_ERROR_MESSAGE)
+
             object_class = type(
                 f"{object_class.__name__}Proxy",
                 (RemoteObject, object_class),
@@ -257,15 +270,15 @@ class AsyncClient:
 
 
 @contextlib.asynccontextmanager
-async def _create_async_client(task_group, connection: Connection) -> AsyncIterator[AsyncClient]:
-    with closing_scope(AsyncClient(task_group, connection)) as client:
-        with cancel_task_on_exit(client.process_messages_from_server()):
-            yield client
+async def _create_async_client(connection: Connection) -> AsyncIterator[AsyncClient]:
+    client = AsyncClient(connection)
+    with cancel_task_on_exit(client.process_messages_from_server()):
+        yield client
 
 
 @contextlib.asynccontextmanager
 async def connect(host_name: str, port: int) -> AsyncIterator[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with connect_to_tcp_server(host_name, port) as connection:
-            async with _create_async_client(task_group, connection) as client:
+            async with _create_async_client(connection) as client:
                 yield client

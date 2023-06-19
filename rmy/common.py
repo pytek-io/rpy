@@ -36,9 +36,6 @@ def scoped_iter(iterable):
         iterable.close()
 
 
-closing_scope = scoped_iter
-
-
 @contextlib.contextmanager
 def cancel_task_on_exit(coroutine: Coroutine):
     task = asyncio.create_task(coroutine)
@@ -52,7 +49,7 @@ def cancel_task_on_exit(coroutine: Coroutine):
 async def execute_cancellable_coroutine(method, *args, **kwargs):
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(method, *args, **kwargs)
-        yield task_group.cancel_scope
+        yield task_group.cancel_scope.cancel
 
 
 async def cancel_task_group_on_signal(task_group: anyio.abc.TaskGroup):

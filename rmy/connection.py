@@ -50,6 +50,11 @@ class TCPConnection(Connection):
             if self.throw_on_eof:
                 raise
 
+    def close(self):
+        self._closing = True
+        self.writer.close()
+        self.reader.feed_eof()
+
     async def __anext__(self):
         try:
             length = await self.reader.readexactly(SIZE_LENGTH)

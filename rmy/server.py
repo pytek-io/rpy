@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import traceback
@@ -21,16 +22,15 @@ from .client_async import (
     FETCH_OBJECT,
     FUNCTION,
     GET_ATTRIBUTE,
-    SET_ATTRIBUTE,
     ITER_ASYNC_ITERATOR,
     OK,
+    SET_ATTRIBUTE,
     USER_EXCEPTION,
 )
 from .common import (
     UserException,
     cancel_task_group_on_signal,
     execute_cancellable_coroutine,
-    print_error_stack,
     scoped_insert,
 )
 from .connection import TCPConnection
@@ -38,7 +38,7 @@ from .connection import TCPConnection
 
 class ClientSession:
     def __init__(self, server, task_group, connection: Connection) -> None:
-        self.session_manager: SessionManager = server
+        self.session_manager: Server = server
         self.task_group = task_group
         self.connection = connection
         self.running_tasks = {}
@@ -123,10 +123,8 @@ class ClientSession:
         await self.send(SET_ATTRIBUTE, request_id, code, result)
 
     async def cancel_running_task(self, request_id: int):
-        running_task = self.running_tasks.get(request_id)
-        if running_task:
-            running_task.cancel()
-            await running_task
+        if running_task := self.running_tasks.get(request_id):
+            running_task()
 
     async def process_messages(self):
         async for code, request_id, payload in self.connection:
@@ -180,7 +178,7 @@ class ClientSession:
             self.session_manager.objects.pop(object_id, None)
 
 
-class SessionManager:
+class Server:
     def __init__(self, server_object: Any) -> None:
         self.server_object = server_object
         self.client_sessions = {}
@@ -190,18 +188,15 @@ class SessionManager:
 
     @contextlib.asynccontextmanager
     async def on_new_connection(self, connection: Connection):
-        with print_error_stack():
-            async with anyio.create_task_group() as task_group:
-                client_session = ClientSession(self, task_group, connection)
-                with scoped_insert(
-                    self.client_sessions, next(self.client_session_id), client_session
-                ):
-                    async with asyncstdlib.closing(client_session):
-                        yield client_session
+        async with anyio.create_task_group() as session_task_group:
+            client_session = ClientSession(self, session_task_group, connection)
+            with scoped_insert(self.client_sessions, next(self.client_session_id), client_session):
+                async with asyncstdlib.closing(client_session):
+                    yield client_session
 
 
 async def _serve_tcp(port: int, server_object: Any):
-    session_manager = SessionManager(server_object)
+    session_manager = Server(server_object)
 
     async def on_new_connection_raw(reader, writer):
         async with session_manager.on_new_connection(

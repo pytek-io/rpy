@@ -16,6 +16,7 @@ from .client_async import (
     connect,
 )
 from .common import cancel_task_on_exit
+import asyncstdlib
 
 
 class SyncClient:
@@ -25,22 +26,28 @@ class SyncClient:
 
     @contextlib.asynccontextmanager
     async def remote_async_iterate(self, iterator_id):
-        queue = janus.Queue()
+        queue = janus.Queue(3)
 
         async def forward_to_main_thread():
             try:
-                async for value in self.async_client.iter_async_generator(iterator_id):
-                    await queue.async_q.put((OK, value))
+                async with asyncstdlib.scoped_iter(
+                    self.async_client.iter_async_generator(iterator_id)
+                ) as stream:
+                    async for value in stream:
+                        queue.async_q.put_nowait((OK, value))
+                        if queue.async_q.unfinished_tasks == queue.async_q.maxsize - 1:
+                            queue.async_q.put_nowait((Exception, "Queue full"))
             except anyio.get_cancelled_exc_class():
                 raise
             except Exception as e:
-                await queue.async_q.put((EXCEPTION, e))
+                queue.async_q.put_nowait((EXCEPTION, e))
             finally:
-                await queue.async_q.put((CLOSE_STREAM, None))
+                queue.async_q.put_nowait((CLOSE_STREAM, None))
 
-        def result_sync_iterator():
+        def result_iterator():
             while True:
                 code, message = queue.sync_q.get()
+                queue.sync_q.task_done()
                 if code in CLOSE_STREAM:
                     queue.close()
                     break
@@ -50,7 +57,7 @@ class SyncClient:
                 yield message
 
         with cancel_task_on_exit(forward_to_main_thread()):
-            yield result_sync_iterator()
+            yield result_iterator()
 
     def sync_generator(self, iterator_id: int):
         with self.portal.wrap_async_context_manager(

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 from pickle import dumps, loads
 from typing import Any, AsyncIterator, Iterator, List, Tuple
@@ -7,8 +9,8 @@ import anyio.abc
 import anyio.lowlevel
 
 import rmy.abc
-from rmy import AsyncClient, SessionManager, SyncClient, _create_async_client
-
+from rmy import AsyncClient, Server, SyncClient, _create_async_client
+from rmy.client_async import ASYNC_GENERATOR_OVERFLOWED_MESSAGE
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
@@ -33,7 +35,9 @@ class TestConnection(rmy.abc.Connection):
         try:
             await self.sink.send(dumps(message))
         except anyio.get_cancelled_exc_class():
-            print(f"Sending {message} was cancelled, {self.name} did not send anything.")
+            print(f"Sending {message} has been cancelled. {self} did not send anything.")
+        except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+            print(f"Sending {message} failed, {self.name} did not send anything.")
 
     async def __anext__(self) -> Any:
         return loads(await self.stream.receive())
@@ -41,13 +45,22 @@ class TestConnection(rmy.abc.Connection):
     def __aiter__(self) -> AsyncIterator[Any]:
         return self
 
-    async def aclose(self):
+    def close(self):
         self.sink.close()
         self.stream.close()
         self._closed.set()
 
+    async def __aenter__(self) -> TestConnection:
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self.close()
+
     async def wait_closed(self):
         await self._closed.wait()
+
+    def __str__(self) -> str:
+        return f"TestConnection({self.name})"
 
 
 def create_test_connection(
@@ -64,23 +77,24 @@ def create_test_connection(
 async def create_test_async_clients(
     server_object, nb_clients: int = 1
 ) -> AsyncIterator[List[AsyncClient]]:
-    clients = []
-    session_manager = SessionManager(server_object)
-    async with anyio.create_task_group() as task_group:
+    server = Server(server_object)
+    async with anyio.create_task_group() as test_task_group:
         async with contextlib.AsyncExitStack() as exit_stack:
-            for i in range(nb_clients):
-                client_name = f"client_{i}"
-                first, second = create_test_connection(client_name, "server")
-                client = await exit_stack.enter_async_context(
-                    _create_async_client(task_group, first)
-                )
-                client_session = await exit_stack.enter_async_context(
-                    session_manager.on_new_connection(second)
-                )
-                task_group.start_soon(client_session.process_messages)
-                clients.append(client)
+            clients = []
+            # for i in range(nb_clients):
+            i = 0
+            client_name = f"client_{i}"
+            connection_end_1, connection_end_2 = create_test_connection(client_name, "server")
+            client = await exit_stack.enter_async_context(_create_async_client(connection_end_1))
+            clients.append(client)
+            client_session = await exit_stack.enter_async_context(
+                server.on_new_connection(connection_end_2)
+            )
+            test_task_group.start_soon(client_session.process_messages)
+            await exit_stack.enter_async_context(connection_end_1)
+            await exit_stack.enter_async_context(connection_end_2)
             yield clients
-            task_group.cancel_scope.cancel()
+            test_task_group.cancel_scope.cancel()
 
 
 @contextlib.contextmanager
@@ -112,7 +126,6 @@ def create_test_proxy_object_sync(remote_object_class, server=None, args=()) -> 
 
 
 class RemoteObject:
-
     def __init__(self, attribute=None) -> None:
         self.attribute = attribute
         self.ran_tasks = 0
