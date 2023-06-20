@@ -151,6 +151,8 @@ class RemoteObject:
                 await anyio.sleep(A_LITTLE_BIT_OF_TIME)
                 self.current_value = i
                 yield i
+        except GeneratorExit:
+            print("Generator exit")
         finally:
             self.finally_called = True
 

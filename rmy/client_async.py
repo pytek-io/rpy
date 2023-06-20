@@ -2,29 +2,29 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-
 if TYPE_CHECKING:
     from client_sync import SyncClient
 
 import asyncio
 import contextlib
 import inspect
+import queue
+from collections import deque
 from collections.abc import AsyncIterable
 from functools import partial
 from itertools import count
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional, Dict
 
 import anyio
 from anyio.abc import TaskStatus
 
-from .abc import Connection
+from .abc import AsyncSink, Connection
 from .common import UserException, cancel_task_on_exit, scoped_insert, scoped_iter
 from .connection import connect_to_tcp_server
 
 
 OK = "OK"
 CLOSE_SENTINEL = "Close sentinel"
-CLOSE_STREAM = "Close stream"
 CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
 USER_EXCEPTION = "UserException"
@@ -48,10 +48,72 @@ This is because it is not a good practice not too wait until a remote operation 
 ASYNC_GENERATOR_NOT_OVERFLOWED = False
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
 
+REQUEST_CODES = (FUNCTION, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE)
+
+class SingleConsumerProducerQueueSync(AsyncSink):
+    """Simplest single reader, single writer queue with bounded size."""
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self._queue = queue.SimpleQueue()
+
+    def send_nowait(self, value: Any):
+        code = OK
+        if self._queue.qsize() == self.size - 1:
+            code, value = EXCEPTION, "Queue full"
+        self._queue.put((code, value))
+        if code == EXCEPTION:
+            raise Exception(value)
+
+    def close(self):
+        pass
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        code, value = self._queue.get()
+        if code == EXCEPTION:
+            raise Exception(value)
+        return value
+
+
+class SingleConsumerProducerQueueAsync(AsyncSink):
+    """Simplest single reader, single writer queue with max size."""
+
+    def __init__(self, size: int) -> None:
+        self._size = size
+        self._values = deque()
+        self._new_data = anyio.Event()
+
+    def send_nowait(self, value: Any):
+        if not self._values:
+            self._new_data.set()
+            self._new_data = anyio.Event()
+        self._values.append(value)
+        if len(self._values) >= self._size:
+            raise OverflowError(ASYNC_GENERATOR_OVERFLOWED_MESSAGE)
+
+    def close(self):
+        self._values.clear()
+        self._new_data.set()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._values:
+            await self._new_data.wait()
+        if not self._values:
+            raise StopAsyncIteration()
+        if len(self._values) >= self._size:
+            raise OverflowError(ASYNC_GENERATOR_OVERFLOWED_MESSAGE)
+        return self._values.popleft()
+
 
 class Result(AsyncIterable):
     def __init__(self, client, object_id: int, function: Callable, args, kwargs):
-        self.client: "AsyncClient" = client
+        self.client: AsyncClient = client
         self.object_id = object_id
         self.function = function
         self.args = args
@@ -111,7 +173,7 @@ class AsyncClient:
         self.request_id = count()
         self.object_id = count()
         self.pending_requests = {}
-        self.async_generators_streams = {}
+        self.async_generators_streams: Dict[int, AsyncSink] = {}
         self.remote_objects = {}
 
     async def send(self, *args):
@@ -126,25 +188,12 @@ class AsyncClient:
         task_status.started()
         try:
             async for code, message_id, status, result in self.connection:
-                if code in (
-                    FUNCTION,
-                    AWAITABLE,
-                    GET_ATTRIBUTE,
-                    CREATE_OBJECT,
-                    FETCH_OBJECT,
-                    SET_ATTRIBUTE,
-                ):
-                    future = self.pending_requests.get(message_id)
-                    if future:
+                if code in REQUEST_CODES:
+                    if future := self.pending_requests.get(message_id):
                         future.set_result((status, result))
                 elif code == ITER_ASYNC_ITERATOR:
-                    if sink_and_overflow_flag := self.async_generators_streams.get(message_id):
-                        sink, overflow_flag = sink_and_overflow_flag
-                        try:
-                            sink.send_nowait((status, result))
-                        except anyio.WouldBlock:
-                            overflow_flag.set(True)
-                            sink.close()
+                    if queue := self.async_generators_streams.get(message_id):
+                        queue.send_nowait((status, result))
                 elif code == CANCELLED_TASK:
                     print("Task cancelled.", message_id, status, result)
                 else:
@@ -196,17 +245,16 @@ class AsyncClient:
             is_cancellable=True,
             include_code=False,
         )
-        async for value in self.iter_async_generator(iterator_id):
+        async for value in self.remote_async_generator_iter(iterator_id):
             yield value
 
-    async def iter_async_generator(self, iterator_id: int):
-        sink, stream = anyio.create_memory_object_stream(STREAM_BUFFER_SIZE)
+    async def remote_async_generator_iter(self, iterator_id: int):
+        queue = SingleConsumerProducerQueueAsync(STREAM_BUFFER_SIZE)
         request_id = next(self.request_id)
-        over_flow_flag = Value(ASYNC_GENERATOR_NOT_OVERFLOWED)
-        with scoped_insert(self.async_generators_streams, request_id, (sink, over_flow_flag)):
+        with scoped_insert(self.async_generators_streams, request_id, queue):
             await self.send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
             try:
-                async for code, value in stream:
+                async for code, value in queue:
                     if code == OK:
                         yield value
                     elif code in (CLOSE_SENTINEL, CANCELLED_TASK):
@@ -217,8 +265,17 @@ class AsyncClient:
                         raise Exception(value)
             finally:
                 await self.cancel_request(request_id)
-                if over_flow_flag():
-                    raise OverflowError(ASYNC_GENERATOR_OVERFLOWED_MESSAGE)
+
+    @contextlib.asynccontextmanager
+    async def remote_sync_generator_iter(self, iterator_id: int):
+        queue = SingleConsumerProducerQueueSync(STREAM_BUFFER_SIZE)
+        request_id = next(self.request_id)
+        with scoped_insert(self.async_generators_streams, request_id, queue):
+            try:
+                await self.send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
+                yield queue
+            finally:
+                await self.cancel_request(request_id)
 
     @contextlib.asynccontextmanager
     async def create_remote_object(

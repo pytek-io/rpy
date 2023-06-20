@@ -20,3 +20,9 @@ class Connection(AsyncIterator[Any], metaclass=ABCMeta):
     @abstractmethod
     def close(self):
         ...
+
+
+class AsyncSink:
+    @abstractmethod
+    def send_nowait(self, value: Any):
+        ...
