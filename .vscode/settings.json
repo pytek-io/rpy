@@ -23,4 +23,5 @@
     "editor.defaultFormatter": "ms-python.black-formatter",
   },
   "python.analysis.typeCheckingMode": "basic",
+  "esbonio.sphinx.confDir": "",
 }

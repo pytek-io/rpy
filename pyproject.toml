@@ -15,7 +15,7 @@ include = ["*rmy*"]
 
 [tool.black]
 line-length = 99
-target_version = ["py37"]
+target_version = ["py38"]
 
 [tool.isort]
 line_length = 99
@@ -46,7 +46,7 @@ authors = ["fdv1 <francois@pytek.io>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.7,<4.0"
+python = ">=3.8,<4.0"
 anyio = "^3.7.0"
 asyncstdlib = "^3.10.7"
 mpmc = "^0.1.0"
@@ -56,6 +56,12 @@ pytest = "^7.3.2"
 mypy = "^1.3.0"
 pydocstyle = "^6.3.0"
 black = "^23.3.0"
+
+
+[tool.poetry.group.docs.dependencies]
+sphinx-autodoc-typehints = "^1.2.0"
+sphinxcontrib-jquery = "^4.1"
+sphinx-rtd-theme = "^1.2.2"
 
 [build-system]
 requires = ["poetry-core"]

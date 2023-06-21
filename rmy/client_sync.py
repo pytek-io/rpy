@@ -1,18 +1,17 @@
 import contextlib
-from typing import Any, Iterator
+import itertools
+from typing import Iterator
 
 import anyio
 
 from .client_async import (
     ASYNC_ITERATOR,
     AWAITABLE,
-    CLOSE_SENTINEL,
-    EXCEPTION,
     FUNCTION,
-    OK,
     SERVER_OBJECT_ID,
     AsyncClient,
     connect,
+    decode_iteration_result,
 )
 
 
@@ -21,18 +20,16 @@ class SyncClient:
         self.portal = portal
         self.async_client: AsyncClient = async_client
 
-    def sync_generator_iter(self, generator_id):
+    def _sync_generator_iter(self, generator_id):
         with self.portal.wrap_async_context_manager(
-            self.async_client.remote_sync_generator_iter(generator_id)
+            self.async_client._remote_sync_generator_iter(generator_id)
         ) as sync_iterator:
-            for code, value in sync_iterator:
-                if code == EXCEPTION:
-                    raise value
-                if code == CLOSE_SENTINEL:
+            for terminated, value in itertools.starmap(decode_iteration_result, sync_iterator):
+                if terminated:
                     break
                 yield value
 
-    def wrap_function(self, object_id, function):
+    def _wrap_function(self, object_id, function):
         def result(*args, **kwargs):
             code, result = self.portal.call(
                 self.async_client.execute_request, FUNCTION, (object_id, function, args, kwargs)
@@ -40,16 +37,11 @@ class SyncClient:
             if code == AWAITABLE:
                 return result
             elif code == ASYNC_ITERATOR:
-                return self.sync_generator_iter(result)
+                return self._sync_generator_iter(result)
 
         return result
 
-    def create_remote_object(self, object_class, args=(), kwarg={}):
-        return self.portal.wrap_async_context_manager(
-            self.async_client.create_remote_object(object_class, args, kwarg, sync_client=self)
-        )
-
-    def wrap_awaitable(self, method):
+    def _wrap_awaitable(self, method):
         def result(_self, *args, **kwargs):
             return self.portal.call(method, *args, **kwargs)
 
@@ -57,6 +49,11 @@ class SyncClient:
 
     def fetch_remote_object(self, object_id: int = SERVER_OBJECT_ID):
         return self.portal.call(self.async_client.fetch_remote_object, object_id, self)
+
+    def create_remote_object(self, object_class, args=(), kwarg={}):
+        return self.portal.wrap_async_context_manager(
+            self.async_client.create_remote_object(object_class, args, kwarg, sync_client=self)
+        )
 
 
 @contextlib.contextmanager

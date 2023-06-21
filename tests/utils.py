@@ -132,11 +132,11 @@ class RemoteObject:
         self.current_value = 0
         self.finally_called = False
 
-    async def echo(self, message: str):
+    async def echo_coroutine(self, message: str):
         await anyio.sleep(A_LITTLE_BIT_OF_TIME)
         return message
 
-    async def throw_exception(self, exception):
+    async def throw_exception_coroutine(self, exception):
         raise exception
 
     async def sleep_forever(self):
@@ -160,7 +160,7 @@ class RemoteObject:
         for i in range(bound):
             yield i
 
-    async def generator_exception(self, exception) -> AsyncIterator[int]:
+    async def async_generator_exception(self, exception) -> AsyncIterator[int]:
         for i in range(10):
             await anyio.sleep(A_LITTLE_BIT_OF_TIME)
             yield i

@@ -8,7 +8,7 @@ from tests.utils import (
     RemoteObject,
     create_proxy_object_async,
 )
-from tests.utils_async import enumerate, scoped_iter, sleep, sleep_forever
+from tests.utils_async import enumerate, scoped_iter, sleep
 
 pytestmark = pytest.mark.anyio
 

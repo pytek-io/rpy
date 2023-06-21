@@ -1,0 +1,21 @@
+import rmy
+import asyncio
+
+
+class Demo:
+    def __init__(self):
+        self.greet = "Hello"
+
+    async def greet(self, name):
+        return f"{self.greet} {name}!"
+
+    async def conversation(self, name):
+        yield f"Hello {name}!"
+        await asyncio.sleep(1)
+        yield f"How are you {name}?"
+        await asyncio.sleep(1)
+        yield f"Goodbye {name}!"
+
+
+if __name__ == "__main__":
+    rmy.run_tcp_server(8080, Demo())

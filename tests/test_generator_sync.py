@@ -45,4 +45,4 @@ def test_overflow():
         with pytest.raises(Exception) as e_info:
             for i in proxy.count_nowait(120):
                 sleep(0.1)
-        # assert e_info.value.args[0] == ASYNC_GENERATOR_OVERFLOWED_MESSAGE
+        assert e_info.value.args[0] == ASYNC_GENERATOR_OVERFLOWED_MESSAGE
