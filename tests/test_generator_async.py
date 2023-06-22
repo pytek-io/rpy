@@ -23,7 +23,7 @@ async def test_stream_exception():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         with pytest.raises(Exception) as e_info:
             async with scoped_iter(
-                proxy.generator_exception(UserException(ERROR_MESSAGE))
+                proxy.async_generator_exception(UserException(ERROR_MESSAGE))
             ) as stream:
                 async for i, value in enumerate(stream):
                     assert i == value

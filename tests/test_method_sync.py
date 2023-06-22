@@ -5,14 +5,13 @@ from tests.utils import (
     create_proxy_object_sync,
     RemoteObject,
 )
-from tests.utils_sync import sleep
 
 
 
 def test_coroutine():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         value = "test"
-        returned_value = proxy.echo(value)
+        returned_value = proxy.echo_coroutine(value)
         assert returned_value is not value
         assert returned_value == value
 
@@ -20,5 +19,5 @@ def test_coroutine():
 def test_coroutine_exception():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         with pytest.raises(UserException) as e_info:
-            proxy.throw_exception(UserException(ERROR_MESSAGE))
+            proxy.throw_exception_coroutine(UserException(ERROR_MESSAGE))
         assert e_info.value.args[0] == ERROR_MESSAGE
