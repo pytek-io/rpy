@@ -16,6 +16,12 @@ async def test_coroutine():
         assert returned_value is not value
         assert returned_value == value
 
+async def test_method():
+    async with create_proxy_object_async(RemoteObject()) as proxy:
+        value = "test"
+        returned_value = await proxy.echo_sync(value)
+        assert returned_value is not value
+        assert returned_value == value
 
 async def test_coroutine_exception():
     async with create_proxy_object_async(RemoteObject()) as proxy:

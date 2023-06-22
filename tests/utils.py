@@ -137,6 +137,9 @@ class RemoteObject:
         await anyio.sleep(A_LITTLE_BIT_OF_TIME)
         return message
 
+    def echo_sync(self, message: str):
+        return message
+
     async def throw_exception_coroutine(self, exception):
         raise exception
 
@@ -151,6 +154,18 @@ class RemoteObject:
             for i in range(bound):
                 await anyio.sleep(A_LITTLE_BIT_OF_TIME)
                 self.current_value = i
+                yield i
+        except GeneratorExit:
+            print("Generator exit")
+        finally:
+            self.finally_called = True
+
+    def count_sync(self, bound: int) -> Iterator[int]:
+        try:
+            for i in range(bound):
+                # time.sleep(A_LITTLE_BIT_OF_TIME)
+                self.current_value = i
+                print(f"Sending {i}")
                 yield i
         except GeneratorExit:
             print("Generator exit")

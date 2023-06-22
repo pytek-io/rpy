@@ -7,7 +7,7 @@ import anyio
 from .client_async import (
     ASYNC_ITERATOR,
     AWAITABLE,
-    FUNCTION,
+    METHOD,
     SERVER_OBJECT_ID,
     AsyncClient,
     connect,
@@ -32,7 +32,7 @@ class SyncClient:
     def _wrap_function(self, object_id, function):
         def result(*args, **kwargs):
             code, result = self.portal.call(
-                self.async_client.execute_request, FUNCTION, (object_id, function, args, kwargs)
+                self.async_client.execute_request, METHOD, (object_id, function, args, kwargs)
             )
             if code == AWAITABLE:
                 return result

@@ -13,9 +13,15 @@ from tests.utils_async import enumerate, scoped_iter, sleep
 pytestmark = pytest.mark.anyio
 
 
-async def test_simple_iteration():
+async def test_simple_async_generator():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async for i, value in enumerate(proxy.count(10)):
+            assert i == value
+
+
+async def test_simple_generator():
+    async with create_proxy_object_async(RemoteObject()) as proxy:
+        async for i, value in enumerate(proxy.count_sync(10)):
             assert i == value
 
 

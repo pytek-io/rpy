@@ -34,7 +34,7 @@ GET_ATTRIBUTE = "Get attribute"
 SET_ATTRIBUTE = "Set attribute"
 ASYNC_ITERATOR = "Async iterator"
 AWAITABLE = "Awaitable"
-FUNCTION = "Function"
+METHOD = "Function"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
 STREAM_BUFFER_SIZE = 10
 
@@ -46,7 +46,7 @@ This is because it is not a good practice not too wait until a remote operation 
 
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
 
-REQUEST_CODES = (FUNCTION, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE)
+REQUEST_CODES = (METHOD, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE)
 
 
 class IterationBufferSync(AsyncSink):
@@ -102,7 +102,7 @@ class AsyncCallResult(AsyncIterable):
     def __await__(self):
         return asyncio.create_task(
             self.client.execute_request(
-                AWAITABLE,
+                METHOD,
                 (self.object_id, self.function, self.args, self.kwargs),
                 is_cancellable=True,
                 include_code=False,
@@ -215,7 +215,7 @@ class AsyncClient:
 
     async def _evaluate_async_generator(self, object_id, function, args, kwargs):
         iterator_id = await self.execute_request(
-            FUNCTION,
+            METHOD,
             (object_id, function, args, kwargs),
             is_cancellable=True,
             include_code=False,
