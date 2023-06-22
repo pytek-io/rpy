@@ -9,8 +9,9 @@ import anyio.abc
 import anyio.lowlevel
 
 import rmy.abc
-from rmy import AsyncClient, Server, SyncClient, _create_async_client
+from rmy import AsyncClient, Server, SyncClient, create_async_client
 from rmy.client_async import ASYNC_GENERATOR_OVERFLOWED_MESSAGE
+
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
@@ -85,7 +86,7 @@ async def create_test_async_clients(
             i = 0
             client_name = f"client_{i}"
             connection_end_1, connection_end_2 = create_test_connection(client_name, "server")
-            client = await exit_stack.enter_async_context(_create_async_client(connection_end_1))
+            client = await exit_stack.enter_async_context(create_async_client(connection_end_1))
             clients.append(client)
             client_session = await exit_stack.enter_async_context(
                 server.on_new_connection(connection_end_2)

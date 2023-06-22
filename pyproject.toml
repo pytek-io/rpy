@@ -49,7 +49,6 @@ readme = "README.md"
 python = ">=3.8,<4.0"
 anyio = "^3.7.0"
 asyncstdlib = "^3.10.7"
-mpmc = "^0.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.3.2"
@@ -61,7 +60,8 @@ black = "^23.3.0"
 [tool.poetry.group.docs.dependencies]
 sphinx-autodoc-typehints = "^1.2.0"
 sphinxcontrib-jquery = "^4.1"
-sphinx-rtd-theme = "^1.2.2"
+furo = "^2023.5.20"
+sphinx = ">=7.0"
 
 [build-system]
 requires = ["poetry-core"]

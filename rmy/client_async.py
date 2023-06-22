@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-# if TYPE_CHECKING:
-#     from client_sync import SyncClient
-
 import asyncio
 import contextlib
 import inspect
@@ -12,7 +7,7 @@ import queue
 from collections.abc import AsyncIterable
 from functools import partial
 from itertools import count
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Optional
 
 import anyio
 import anyio.abc
@@ -21,6 +16,10 @@ import asyncstdlib
 from .abc import AsyncSink, Connection
 from .common import UserException, cancel_task_on_exit, scoped_insert
 from .connection import connect_to_tcp_server
+
+
+if TYPE_CHECKING:
+    from .client_sync import SyncClient
 
 
 OK = "OK"
@@ -250,7 +249,7 @@ class AsyncClient:
 
     @contextlib.asynccontextmanager
     async def create_remote_object(
-        self, object_class, args=(), kwarg={}, sync_client: Optional["SyncClient"] = None
+        self, object_class, args=(), kwarg={}, sync_client: Optional[SyncClient] = None
     ):
         object_id = await self.execute_request(
             CREATE_OBJECT, (object_class, args, kwarg), include_code=False
@@ -262,7 +261,7 @@ class AsyncClient:
                 await self._send(DELETE_OBJECT, 0, object_id)
 
     async def fetch_remote_object(
-        self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional["SyncClient"] = None
+        self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional[SyncClient] = None
     ) -> Any:
         if object_id not in self.remote_objects:
             object_class = await self.execute_request(FETCH_OBJECT, object_id, include_code=False)
@@ -298,7 +297,7 @@ class AsyncClient:
 
 
 @contextlib.asynccontextmanager
-async def _create_async_client(connection: Connection) -> AsyncIterator[AsyncClient]:
+async def create_async_client(connection: Connection) -> AsyncIterator[AsyncClient]:
     client = AsyncClient(connection)
     with cancel_task_on_exit(client._process_messages_from_server()):
         yield client
@@ -308,5 +307,5 @@ async def _create_async_client(connection: Connection) -> AsyncIterator[AsyncCli
 async def connect(host_name: str, port: int) -> AsyncIterator[AsyncClient]:
     async with anyio.create_task_group() as task_group:
         async with connect_to_tcp_server(host_name, port) as connection:
-            async with _create_async_client(connection) as client:
+            async with create_async_client(connection) as client:
                 yield client
