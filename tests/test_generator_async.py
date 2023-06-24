@@ -13,13 +13,13 @@ from tests.utils_async import enumerate, scoped_iter, sleep
 pytestmark = pytest.mark.anyio
 
 
-async def test_simple_async_generator():
+async def test_async_generator():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async for i, value in enumerate(proxy.count(10)):
             assert i == value
 
 
-async def test_simple_generator():
+async def test_sync_generator():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async for i, value in enumerate(proxy.count_sync(10)):
             assert i == value
@@ -44,6 +44,7 @@ async def test_stream_early_exit():
                     break
         await sleep(ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS + 1)
         assert await proxy.finally_called
+        # the current value should be 3 since the producer is slower than the consumer
         assert await proxy.current_value == 3
 
 

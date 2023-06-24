@@ -12,7 +12,7 @@ from tests.utils import (
 pytestmark = pytest.mark.anyio
 
 
-async def test_stream_cancellation():
+async def test_async_generator_cancellation():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async with anyio.create_task_group():
             with anyio.move_on_after(1):
