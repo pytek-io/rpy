@@ -51,7 +51,7 @@ class SyncClient:
         return result
 
     def fetch_remote_object(self, object_id: int = SERVER_OBJECT_ID):
-        return self.portal.call(self.async_client.fetch_remote_object, object_id, self)
+        return self.portal.call(self.async_client._fetch_remote_object, object_id, self)
 
     def create_remote_object(self, object_class, args=(), kwarg={}):
         return self.portal.wrap_async_context_manager(

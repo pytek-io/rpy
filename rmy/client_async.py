@@ -140,6 +140,10 @@ class RemoteObject:
         self.object_id = object_id
 
 
+def __setattr_forbidden__(_self, _name, _value):
+    raise AttributeError(ASYNC_SETATTR_ERROR_MESSAGE)
+
+
 class AsyncClient:
     def __init__(
         self, connection: Connection, async_buffer_size: int = STREAM_BUFFER_SIZE
@@ -162,20 +166,17 @@ class AsyncClient:
         self, task_status: anyio.abc.TaskStatus = anyio.TASK_STATUS_IGNORED
     ):
         task_status.started()
-        try:
-            async for code, message_id, status, result in self.connection:
-                if code in REQUEST_CODES:
-                    if future := self.pending_requests.get(message_id):
-                        future.set_result((status, result))
-                elif code == ITER_ASYNC_ITERATOR:
-                    if queue := self._iteraton_buffers.get(message_id):
-                        queue.send_nowait((status, result))
-                elif code == CANCELLED_TASK:
-                    print("Task cancelled.", message_id, status, result)
-                else:
-                    print(f"Unexpected code {code} received.")
-        except Exception as e:
-            print(e)
+        async for code, message_id, status, result in self.connection:
+            if code in REQUEST_CODES:
+                if future := self.pending_requests.get(message_id):
+                    future.set_result((status, result))
+            elif code == ITER_ASYNC_ITERATOR:
+                if queue := self._iteraton_buffers.get(message_id):
+                    queue.send_nowait((status, result))
+            elif code == CANCELLED_TASK:
+                print("Task cancelled.", message_id, status, result)
+            else:
+                print(f"Unexpected code {code} received.")
 
     @contextlib.contextmanager
     def _submit_request(self, code, args, is_cancellable=False):
@@ -225,7 +226,9 @@ class AsyncClient:
         with scoped_insert(self._iteraton_buffers, request_id, queue):
             await self._send(ITER_ASYNC_ITERATOR, request_id, (generator_id,))
             try:
-                async for index, (terminated, value) in asyncstdlib.enumerate(asyncstdlib.starmap(decode_iteration_result, queue)):
+                async for index, (terminated, value) in asyncstdlib.enumerate(
+                    asyncstdlib.starmap(decode_iteration_result, queue)
+                ):
                     if terminated:
                         break
                     yield value
@@ -253,12 +256,12 @@ class AsyncClient:
             CREATE_OBJECT, (object_class, args, kwarg), include_code=False
         )
         try:
-            yield await self.fetch_remote_object(object_id, sync_client)
+            yield await self._fetch_remote_object(object_id, sync_client)
         finally:
             with anyio.CancelScope(shield=True):
                 await self._send(DELETE_OBJECT, 0, object_id)
 
-    async def fetch_remote_object(
+    async def _fetch_remote_object(
         self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional[SyncClient] = None
     ) -> Any:
         if object_id not in self.remote_objects:
@@ -269,10 +272,7 @@ class AsyncClient:
                 __getattr__ = sync_client._wrap_awaitable(__getattr__)
                 setattr = __setattr__ = sync_client._wrap_awaitable(setattr)
             else:
-
-                def __setattr__(_self, _name, _value):
-                    raise AttributeError(ASYNC_SETATTR_ERROR_MESSAGE)
-
+                __setattr__ = __setattr_forbidden__
             object_class = type(
                 f"{object_class.__name__}Proxy",
                 (RemoteObject, object_class),
@@ -292,6 +292,9 @@ class AsyncClient:
                     object.__setattr__(remote_object, name, method)
             self.remote_objects[object_id] = remote_object
         return self.remote_objects[object_id]
+
+    async def fetch_remote_object(self, object_id: int = SERVER_OBJECT_ID):
+        return await self._fetch_remote_object(object_id)
 
 
 @contextlib.asynccontextmanager

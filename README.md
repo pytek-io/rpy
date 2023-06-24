@@ -1,4 +1,8 @@
-A powerful PRC framework to build distributed applications easily in Python. 
+[![PyPI version](https://img.shields.io/pypi/v/rmy)](https://pypi.org/project/rmy/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/rmy)](https://pypi.org/project/rmy/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![test suite](https://github.com/pytek-io/rmy/actions/workflows/main.yml/badge.svg)](https://github.com/pytek-io/rmy/actions/workflows/main.yml)
+[![Coverage Status](https://coveralls.io/repos/github/pytek-io/rmy/badge.svg?branch=main)](https://coveralls.io/github/pytek-io/rmy?branch=main)
 
 ## How to use it
 

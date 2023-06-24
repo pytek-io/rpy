@@ -1,0 +1,60 @@
+name: test suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pyright:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.x
+    - uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: pip-pyright
+    - name: Install dependencies
+      run: pip install -e . pyright pytest
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.8"]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        allow-prereleases: true
+        cache: pip
+        cache-dependency-path: pyproject.toml
+    - name: Install poetry
+      run: pip install -U poetry
+    - name: Install dependencies
+      run: poetry install
+    - name: Test with coverage
+      run: poetry run coverage run -m pytest -v tests
+      timeout-minutes: 5
+      env:
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD: 1
+    - name: Coveralls
+      uses: coverallsapp/github-action@v2
+
+  coveralls:
+    name: Finish Coveralls
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Finished
+      uses: coverallsapp/github-action@v2
+      with:
+        parallel-finished: true

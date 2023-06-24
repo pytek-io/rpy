@@ -1,0 +1,62 @@
+name: test suite
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  pyright:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.x
+    - uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: pip-pyright
+    - name: Install dependencies
+      run: pip install -e . pyright pytest
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.8"]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        allow-prereleases: true
+        cache: pip
+        cache-dependency-path: pyproject.toml
+    - name: Install dependencies
+      run: pip install -e .[test] coveralls
+    - name: Test with pytest
+      run: coverage run -m pytest -v
+      timeout-minutes: 5
+      env:
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD: 1
+    - name: Upload Coverage
+      run: coveralls --service=github
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        COVERALLS_FLAG_NAME: ${{ matrix.test-name }}
+        COVERALLS_PARALLEL: true
+
+  coveralls:
+    name: Finish Coveralls
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Finished
+      uses: coverallsapp/github-action@v2
+      with:
+        parallel-finished: true

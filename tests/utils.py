@@ -111,7 +111,7 @@ def create_test_sync_clients(server_object, nb_clients: int = 1) -> Iterator[Lis
 @contextlib.asynccontextmanager
 async def create_proxy_object_async(remote_object: T_Retval) -> AsyncIterator[T_Retval]:
     async with create_test_async_clients(remote_object, nb_clients=1) as (client,):
-        yield await client.fetch_remote_object(0)
+        yield await client.fetch_remote_object()
 
 
 @contextlib.contextmanager
