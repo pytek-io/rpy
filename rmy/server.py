@@ -13,7 +13,6 @@ import asyncstdlib
 from .abc import Connection
 from .client_async import (
     ASYNC_ITERATOR,
-    AWAITABLE,
     CANCELLED_TASK,
     CLOSE_SENTINEL,
     CREATE_OBJECT,
@@ -22,6 +21,7 @@ from .client_async import (
     FETCH_OBJECT,
     GET_ATTRIBUTE,
     ITER_ASYNC_ITERATOR,
+    MOVE_ASYNC_ITERATOR,
     METHOD,
     OK,
     SET_ATTRIBUTE,
@@ -37,7 +37,7 @@ async def wrap_sync_generator(sync_generator):
 
 
 async def wrap_coroutine(coroutine):
-    return AWAITABLE, await coroutine
+    return OK, await coroutine
 
 
 class ClientSession:
@@ -46,7 +46,7 @@ class ClientSession:
         self.task_group = task_group
         self.connection = connection
         self.running_tasks = {}
-        self.pending_async_generators = {}
+        self.pending_generators = {}
         self.own_objects = set()
         self.synchronization_indexes = {}
 
@@ -56,15 +56,19 @@ class ClientSession:
     def send_nowait(self, code: str, request_id: int, status: str, value: Any):
         self.connection.send_nowait((code, request_id, status, value))
 
-    async def iterate_through_async_generator_unsync(self, request_id: int, coroutine_or_async_generator):
+    async def iterate_through_async_generator_unsync(
+        self, request_id: int, iterator_id: int, coroutine_or_async_generator
+    ):
         async with asyncstdlib.scoped_iter(coroutine_or_async_generator) as aiter:
             async for value in aiter:
                 await self.send(ITER_ASYNC_ITERATOR, request_id, OK, value)
         return CLOSE_SENTINEL, None
 
-    async def iterate_through_async_generator_sync(self, request_id: int, coroutine_or_async_generator):
+    async def iterate_through_async_generator_sync(
+        self, request_id: int, iterator_id: int, coroutine_or_async_generator
+    ):
         index_and_event = [0, anyio.Event()]
-        with scoped_insert(self.synchronization_indexes, request_id, index_and_event):
+        with scoped_insert(self.synchronization_indexes, iterator_id, index_and_event):
             async with asyncstdlib.scoped_iter(coroutine_or_async_generator) as aiter:
                 async for index, value in asyncstdlib.enumerate(aiter):
                     await self.send(ITER_ASYNC_ITERATOR, request_id, OK, value)
@@ -72,9 +76,20 @@ class ClientSession:
                         await index_and_event[1].wait()
             return CLOSE_SENTINEL, None
 
-    async def run_task(
-        self, request_id, task_code, coroutine_or_async_generator
-    ):
+    def iterate_generator(self, request_id: int, iterator_id: int):
+        if not (generator := self.pending_generators.pop(iterator_id, None)):
+            return
+        push, generator = generator
+        method = (
+            self.iterate_through_async_generator_unsync
+            if push
+            else self.iterate_through_async_generator_sync
+        )
+        self.cancellable_run_task(
+            request_id, ITER_ASYNC_ITERATOR, method(request_id, iterator_id, generator)
+        )
+
+    async def run_task(self, request_id, task_code, coroutine_or_async_generator):
         status, result = EXCEPTION, None
         try:
             status, result = await coroutine_or_async_generator
@@ -143,38 +158,31 @@ class ClientSession:
             running_task()
 
     def move_async_generator_index(self, request_id: int, index: int):
-        if index_and_event := self.synchronization_indexes.get(request_id):
+        if index_and_event := self.synchronization_indexes.get(request_id, None):
             index_and_event[1].set()
             index_and_event[0] = index
             index_and_event[1] = anyio.Event()
+
+    async def evaluate_method(self, request_id, task_code, object_id, method, args, kwargs):
+        result = method(self.session_manager.objects[object_id], *args, **kwargs)
+        if inspect.iscoroutine(result):
+            self.cancellable_run_task(request_id, task_code, wrap_coroutine(result))
+        elif inspect.isasyncgen(result) or inspect.isgenerator(result):
+            is_async = inspect.isasyncgen(result)
+            self.pending_generators[request_id] = (is_async, result)
+            await self.send(task_code, request_id, ASYNC_ITERATOR, (is_async, request_id))
+        else:
+            await self.send(task_code, request_id, OK, result)
 
     async def process_messages(self):
         async for task_code, request_id, payload in self.connection:
             try:
                 if task_code == METHOD:
-                    object_id, method, args, kwargs = payload
-                    result = method(self.session_manager.objects[object_id], *args, **kwargs)
-                    if inspect.iscoroutine(result):
-                        self.cancellable_run_task(request_id, task_code, wrap_coroutine(result))
-                    elif inspect.isasyncgen(result):
-                        self.pending_async_generators[request_id] = result
-                        await self.send(task_code, request_id, ASYNC_ITERATOR, request_id)
-                    elif inspect.isgenerator(result):
-                        self.pending_async_generators[request_id] = wrap_sync_generator(result)
-                        await self.send(task_code, request_id, ASYNC_ITERATOR, request_id)
-                    else:
-                        await self.send(task_code, request_id, OK, result)
+                    await self.evaluate_method(request_id, task_code, *payload)
                 elif task_code == CANCELLED_TASK:
                     await self.cancel_running_task(request_id)
                 elif task_code == ITER_ASYNC_ITERATOR:
-                    iterator_id, push = payload
-                    self.cancellable_run_task(
-                        request_id,
-                        task_code,
-                        self.iterate_through_async_generator_unsync(
-                            request_id, self.pending_async_generators.pop(payload)
-                        ),
-                    )
+                    self.iterate_generator(request_id, *payload)
                 elif task_code == GET_ATTRIBUTE:
                     await self.get_attribute(request_id, *payload)
                 elif task_code == SET_ATTRIBUTE:
@@ -183,8 +191,8 @@ class ClientSession:
                     await self.create_object(request_id, *payload)
                 elif task_code == FETCH_OBJECT:
                     await self.fetch_object(request_id, payload)
-                elif task_code == ITER_ASYNC_ITERATOR:
-                    self.move_async_generator_index(request_id, payload)
+                elif task_code == MOVE_ASYNC_ITERATOR:
+                    self.move_async_generator_index(request_id, *payload)
                 elif task_code == DELETE_OBJECT:
                     self.session_manager.objects.pop(payload, None)
                     self.own_objects.discard(payload)

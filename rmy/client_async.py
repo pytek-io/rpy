@@ -33,7 +33,7 @@ FETCH_OBJECT = "Fetch object"
 GET_ATTRIBUTE = "Get attribute"
 SET_ATTRIBUTE = "Set attribute"
 ASYNC_ITERATOR = "Async iterator"
-AWAITABLE = "Awaitable"
+MOVE_ASYNC_ITERATOR = "Move Async iterator"
 METHOD = "Function"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
 STREAM_BUFFER_SIZE = 10
@@ -46,7 +46,7 @@ This is because it is not a good practice not too wait until a remote operation 
 
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
 
-REQUEST_CODES = (METHOD, AWAITABLE, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE)
+REQUEST_CODES = (METHOD, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE)
 
 
 class IterationBufferSync(AsyncSink):
@@ -116,7 +116,7 @@ class AsyncCallResult(AsyncIterable):
 
 
 def decode_result(code, result, include_code=True):
-    if code in (CANCELLED_TASK, OK, AWAITABLE, ASYNC_ITERATOR):
+    if code in (CANCELLED_TASK, OK, ASYNC_ITERATOR):
         return (code, result) if include_code else result
     if code == USER_EXCEPTION:
         raise UserException(result)
@@ -214,25 +214,23 @@ class AsyncClient:
         await self.connection.drain()
 
     async def _evaluate_async_generator(self, object_id, function, args, kwargs):
-        iterator_id = await self.execute_request(
+        push_or_pull, generator_id = await self.execute_request(
             METHOD,
             (object_id, function, args, kwargs),
             is_cancellable=True,
             include_code=False,
         )
-        async for value in self._remote_async_generator_iter(iterator_id):
-            yield value
-
-    async def _remote_async_generator_iter(self, iterator_id: int):
         queue = IterationBufferAsync(self._async_buffer_size)
         request_id = next(self.request_id)
         with scoped_insert(self._iteraton_buffers, request_id, queue):
-            await self._send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
+            await self._send(ITER_ASYNC_ITERATOR, request_id, (generator_id,))
             try:
-                async for terminated, value in asyncstdlib.starmap(decode_iteration_result, queue):
+                async for index, (terminated, value) in asyncstdlib.enumerate(asyncstdlib.starmap(decode_iteration_result, queue)):
                     if terminated:
                         break
                     yield value
+                    if not push_or_pull:
+                        await self._send(MOVE_ASYNC_ITERATOR, generator_id, (index + 1,))
             finally:
                 await self._cancel_request(request_id)
 
@@ -242,7 +240,7 @@ class AsyncClient:
         request_id = next(self.request_id)
         with scoped_insert(self._iteraton_buffers, request_id, queue):
             try:
-                await self._send(ITER_ASYNC_ITERATOR, request_id, iterator_id)
+                await self._send(ITER_ASYNC_ITERATOR, request_id, (iterator_id,))
                 yield queue
             finally:
                 await self._cancel_request(request_id)

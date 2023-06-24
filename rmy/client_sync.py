@@ -6,7 +6,8 @@ import anyio
 
 from .client_async import (
     ASYNC_ITERATOR,
-    AWAITABLE,
+    MOVE_ASYNC_ITERATOR,
+    OK,
     METHOD,
     SERVER_OBJECT_ID,
     AsyncClient,
@@ -20,24 +21,26 @@ class SyncClient:
         self.portal = portal
         self.async_client: AsyncClient = async_client
 
-    def _sync_generator_iter(self, generator_id):
+    def _sync_generator_iter(self, push_or_pull, generator_id):
         with self.portal.wrap_async_context_manager(
             self.async_client._remote_sync_generator_iter(generator_id)
         ) as sync_iterator:
-            for terminated, value in itertools.starmap(decode_iteration_result, sync_iterator):
+            for index, (terminated, value) in enumerate(itertools.starmap(decode_iteration_result, sync_iterator)):
                 if terminated:
                     break
                 yield value
+                if not push_or_pull:
+                    self.portal.call(self.async_client._send, MOVE_ASYNC_ITERATOR, generator_id, (index + 1,))
 
     def _wrap_function(self, object_id, function):
         def result(*args, **kwargs):
             code, result = self.portal.call(
                 self.async_client.execute_request, METHOD, (object_id, function, args, kwargs)
             )
-            if code == AWAITABLE:
+            if code == OK:
                 return result
             elif code == ASYNC_ITERATOR:
-                return self._sync_generator_iter(result)
+                return self._sync_generator_iter(*result)
 
         return result
 
