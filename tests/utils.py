@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from pickle import dumps, loads
-from typing import Any, AsyncIterator, Iterator, List, Tuple
+from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar
 
 import anyio
 import anyio.abc
@@ -12,6 +12,7 @@ import rmy.abc
 from rmy import AsyncClient, Server, SyncClient, create_async_client
 from rmy.client_async import ASYNC_GENERATOR_OVERFLOWED_MESSAGE
 
+T_Retval = TypeVar("T_Retval")
 
 ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
@@ -108,13 +109,13 @@ def create_test_sync_clients(server_object, nb_clients: int = 1) -> Iterator[Lis
 
 
 @contextlib.asynccontextmanager
-async def create_proxy_object_async(remote_object) -> AsyncIterator[Any]:
+async def create_proxy_object_async(remote_object: T_Retval) -> AsyncIterator[T_Retval]:
     async with create_test_async_clients(remote_object, nb_clients=1) as (client,):
         yield await client.fetch_remote_object(0)
 
 
 @contextlib.contextmanager
-def create_proxy_object_sync(remote_object) -> Iterator[Any]:
+def create_proxy_object_sync(remote_object: T_Retval) -> Iterator[T_Retval]:
     with create_test_sync_clients(remote_object, nb_clients=1) as (client,):
         yield client.fetch_remote_object(0)
 
