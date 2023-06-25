@@ -1,6 +1,5 @@
 import pytest
 
-from rmy import RemoteException
 from tests.utils import ERROR_MESSAGE, RemoteObject, create_proxy_object_async, test_exception
 
 

@@ -14,7 +14,7 @@ import anyio.abc
 import asyncstdlib
 
 from .abc import AsyncSink, Connection
-from .common import RemoteException, cancel_task_on_exit, scoped_insert
+from .common import cancel_task_on_exit, scoped_insert
 from .connection import connect_to_tcp_server
 
 
