@@ -7,9 +7,11 @@ from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar
 import anyio
 import anyio.abc
 import anyio.lowlevel
+import pytest
 
 import rmy.abc
-from rmy import AsyncClient, Server, SyncClient, create_async_client
+from rmy.server import Server
+from rmy import AsyncClient, SyncClient, create_async_client, RemoteException
 from rmy.client_async import ASYNC_GENERATOR_OVERFLOWED_MESSAGE
 
 T_Retval = TypeVar("T_Retval")
@@ -73,6 +75,16 @@ def create_test_connection(
     return TestConnection(first_sink, second_stream, first_name), TestConnection(
         second_sink, first_stream, second_name
     )
+
+
+@contextlib.contextmanager
+def test_exception():
+    exception = RuntimeError(ERROR_MESSAGE)
+    with pytest.raises(RemoteException) as e_info:
+        yield exception
+        returned_exception = e_info.value.args[0]
+        assert isinstance(returned_exception, type(exception))
+        assert returned_exception.args[0] == exception.args[0]
 
 
 @contextlib.asynccontextmanager
@@ -182,4 +194,4 @@ class RemoteObject:
             await anyio.sleep(A_LITTLE_BIT_OF_TIME)
             yield i
             if i == 3:
-                raise exception
+                await self.throw_exception_coroutine(exception)

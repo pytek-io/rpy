@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
+import sys
 import traceback
 from itertools import count
 from typing import Any
-import inspect
+
 import anyio
 import anyio.abc
 import asyncstdlib
@@ -21,13 +23,12 @@ from .client_async import (
     FETCH_OBJECT,
     GET_ATTRIBUTE,
     ITER_ASYNC_ITERATOR,
-    MOVE_ASYNC_ITERATOR,
     METHOD,
+    MOVE_ASYNC_ITERATOR,
     OK,
     SET_ATTRIBUTE,
-    USER_EXCEPTION,
 )
-from .common import UserException, cancel_task_group_on_signal, scoped_insert
+from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
 from .connection import TCPConnection
 
 
@@ -96,10 +97,9 @@ class ClientSession:
         except anyio.get_cancelled_exc_class():
             status = CANCELLED_TASK
             raise
-        except UserException as e:
-            status, result = USER_EXCEPTION, e.args[0]
-        except Exception:
-            status, result = EXCEPTION, traceback.format_exc()
+        except Exception as e:
+            _, e, tb = sys.exc_info()
+            status, result = EXCEPTION, RemoteException(e, traceback.extract_tb(tb)[3:])
         finally:
             with anyio.CancelScope(shield=True):
                 await self.send(task_code, request_id, status, result)

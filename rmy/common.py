@@ -57,7 +57,7 @@ async def cancel_task_group_on_signal(task_group: anyio.abc.TaskGroup):
             return
 
 
-class UserException(Exception):
+class RemoteException(Exception):
     """Use this to signal expected errors to users."""
 
     pass

@@ -1,15 +1,14 @@
 import pytest
 
-from rmy import UserException
+from rmy import RemoteException
 from tests.utils import (
+    ASYNC_GENERATOR_OVERFLOWED_MESSAGE,
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
     ERROR_MESSAGE,
-    ASYNC_GENERATOR_OVERFLOWED_MESSAGE,
     RemoteObject,
     create_proxy_object_sync,
 )
 from tests.utils_sync import enumerate, scoped_iter, sleep
-
 
 
 def test_async_generator():
@@ -28,7 +27,7 @@ def test_async_generator_exception():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         with pytest.raises(Exception) as e_info:
             with scoped_iter(
-                proxy.async_generator_exception(UserException(ERROR_MESSAGE))
+                proxy.async_generator_exception(RemoteException(ERROR_MESSAGE))
             ) as stream:
                 for i, value in enumerate(stream):
                     assert i == value

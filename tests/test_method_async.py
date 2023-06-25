@@ -1,10 +1,8 @@
 import pytest
-from rmy import UserException
-from tests.utils import (
-    ERROR_MESSAGE,
-    create_proxy_object_async,
-    RemoteObject,
-)
+
+from rmy import RemoteException
+from tests.utils import ERROR_MESSAGE, RemoteObject, create_proxy_object_async, test_exception
+
 
 pytestmark = pytest.mark.anyio
 
@@ -18,10 +16,10 @@ async def test_async_method():
 
 
 async def test_async_method_exception():
-    async with create_proxy_object_async(RemoteObject()) as proxy:
-        with pytest.raises(UserException) as e_info:
-            await proxy.throw_exception_coroutine(UserException(ERROR_MESSAGE))
-        assert e_info.value.args[0] == ERROR_MESSAGE
+    with test_exception() as exception:
+        async with create_proxy_object_async(RemoteObject()) as proxy:
+            await proxy.throw_exception_coroutine(exception)
+
 
 
 async def test_sync_method():
@@ -33,7 +31,6 @@ async def test_sync_method():
 
 
 async def test_sync_method_exception():
-    async with create_proxy_object_async(RemoteObject()) as proxy:
-        with pytest.raises(UserException) as e_info:
-            await proxy.throw_exception_coroutine(UserException(ERROR_MESSAGE))
-        assert e_info.value.args[0] == ERROR_MESSAGE
+    with test_exception() as exception:
+        async with create_proxy_object_async(RemoteObject()) as proxy:
+            await proxy.throw_exception_coroutine(exception)

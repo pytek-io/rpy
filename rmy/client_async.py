@@ -14,7 +14,7 @@ import anyio.abc
 import asyncstdlib
 
 from .abc import AsyncSink, Connection
-from .common import UserException, cancel_task_on_exit, scoped_insert
+from .common import RemoteException, cancel_task_on_exit, scoped_insert
 from .connection import connect_to_tcp_server
 
 
@@ -26,7 +26,6 @@ OK = "OK"
 CLOSE_SENTINEL = "Close sentinel"
 CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
-USER_EXCEPTION = "UserException"
 CREATE_OBJECT = "Create object"
 DELETE_OBJECT = "Delete object"
 FETCH_OBJECT = "Fetch object"
@@ -118,12 +117,8 @@ class AsyncCallResult(AsyncIterable):
 def decode_result(code, result, include_code=True):
     if code in (CANCELLED_TASK, OK, ASYNC_ITERATOR):
         return (code, result) if include_code else result
-    if code == USER_EXCEPTION:
-        raise UserException(result)
     if code == EXCEPTION:
-        if isinstance(result, Exception):
-            raise result
-        raise Exception(result)
+        raise result
     else:
         raise Exception(f"Unexpected code {code} received.")
 
