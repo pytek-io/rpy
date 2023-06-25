@@ -1,4 +1,6 @@
-__version__ = "0.1.0"
+__version__ = "0.1.2"
+__author__ = "Francois du Vignaud"
+
 __all__ = [
     "AsyncClient",
     "create_async_client",

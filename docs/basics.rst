@@ -31,9 +31,9 @@ The `run_tcp_server` method will expose an instance of the `Demo` object which c
         with rmy.create_sync_client("localhost", 8080) as client:
             proxy: Demo = client.fetch_remote_object()
             while True:
-            print('Enter your name:')
-            name = input()
-            print(proxy.greet(name))
+                print('Enter your name:')
+                name = input()
+                print(proxy.greet(name))
 
 
 The object returned `fetch_remote_object` call is a proxy object which has the *almost* same interface as the one that is being shared which is therefore type-hinted as `Demo`. As a sharp reader/linter would notice the `greet` method is an asynchronous method which we call synchronously. This is because of the fact we connected through a synchronous client. If we use `create_async_client` instead, the `greet` method will remain asynchronous. 

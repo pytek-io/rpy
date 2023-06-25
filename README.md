@@ -1,12 +1,12 @@
 [![PyPI version](https://img.shields.io/pypi/v/rmy)](https://pypi.org/project/rmy/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/pypi/pyversions/rmy)](https://pypi.org/project/rmy/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![test suite](https://github.com/pytek-io/rmy/actions/workflows/main.yml/badge.svg)](https://github.com/pytek-io/rmy/actions/workflows/main.yml)
 [![Coverage Status](https://coveralls.io/repos/github/pytek-io/rmy/badge.svg?branch=main)](https://coveralls.io/github/pytek-io/rmy?branch=main)
 
 ## How to use it
 
-One can expose a Python object through a server as follow.
+One can expose a Python object through a server as follows.
 
 ``` python
 class Demo:
