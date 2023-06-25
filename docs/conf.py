@@ -29,6 +29,7 @@ pygments_style = "sphinx"
 autodoc_default_options = {"members": True, "show-inheritance": True}
 todo_include_todos = False
 
+html_title = "RMY"
 html_theme = "furo"
 htmlhelp_basename = "rmy-yeah doc"
 
