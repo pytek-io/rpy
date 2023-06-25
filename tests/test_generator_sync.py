@@ -24,7 +24,7 @@ def test_sync_generator():
             assert i == value
 
 
-def test_stream_exception():
+def test_async_generator_exception():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         with pytest.raises(Exception) as e_info:
             with scoped_iter(
