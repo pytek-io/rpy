@@ -9,6 +9,7 @@ from .client_async import (
     MOVE_ASYNC_ITERATOR,
     OK,
     METHOD,
+    COROUTINE,
     SERVER_OBJECT_ID,
     AsyncClient,
     connect,
@@ -25,12 +26,16 @@ class SyncClient:
         with self.portal.wrap_async_context_manager(
             self.async_client._remote_sync_generator_iter(generator_id)
         ) as sync_iterator:
-            for index, (terminated, value) in enumerate(itertools.starmap(decode_iteration_result, sync_iterator)):
+            for index, (terminated, value) in enumerate(
+                itertools.starmap(decode_iteration_result, sync_iterator)
+            ):
                 if terminated:
                     break
                 yield value
                 if not push_or_pull:
-                    self.portal.call(self.async_client._send, MOVE_ASYNC_ITERATOR, generator_id, (index + 1,))
+                    self.portal.call(
+                        self.async_client._send, MOVE_ASYNC_ITERATOR, generator_id, (index + 1,)
+                    )
 
     def _wrap_function(self, object_id, function):
         def result(*args, **kwargs):
@@ -41,6 +46,10 @@ class SyncClient:
                 return result
             elif code == ASYNC_ITERATOR:
                 return self._sync_generator_iter(*result)
+            elif code == COROUTINE:
+                return self.portal.call(self.async_client.execute_request, COROUTINE, (result,), False, False)
+            else:
+                raise Exception(f"Unexpected code: {code}")
 
         return result
 

@@ -26,6 +26,7 @@ from .client_async import (
     METHOD,
     MOVE_ASYNC_ITERATOR,
     OK,
+    COROUTINE,
     SET_ATTRIBUTE,
 )
 from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
@@ -47,7 +48,7 @@ class ClientSession:
         self.task_group = task_group
         self.connection = connection
         self.running_tasks = {}
-        self.pending_generators = {}
+        self.pending_results = {}
         self.own_objects = set()
         self.synchronization_indexes = {}
 
@@ -78,7 +79,7 @@ class ClientSession:
             return CLOSE_SENTINEL, None
 
     def iterate_generator(self, request_id: int, iterator_id: int):
-        if not (generator := self.pending_generators.pop(iterator_id, None)):
+        if not (generator := self.pending_results.pop(iterator_id, None)):
             return
         push, generator = generator
         method = (
@@ -89,6 +90,11 @@ class ClientSession:
         self.cancellable_run_task(
             request_id, ITER_ASYNC_ITERATOR, method(request_id, iterator_id, generator)
         )
+
+    def evaluate_coroutine(self, request_id: int, coroutine_id: int):
+        if not (coroutine := self.pending_results.pop(coroutine_id, None)):
+            return
+        self.cancellable_run_task(request_id, COROUTINE, wrap_coroutine(coroutine))
 
     async def run_task(self, request_id, task_code, coroutine_or_async_generator):
         status, result = EXCEPTION, None
@@ -166,11 +172,12 @@ class ClientSession:
     async def evaluate_method(self, request_id, task_code, object_id, method, args, kwargs):
         result = method(self.session_manager.objects[object_id], *args, **kwargs)
         if inspect.iscoroutine(result):
-            self.cancellable_run_task(request_id, task_code, wrap_coroutine(result))
+            self.pending_results[request_id] = result
+            await self.send(task_code, request_id, COROUTINE, request_id)
         elif inspect.isasyncgen(result) or inspect.isgenerator(result):
-            is_async = inspect.isasyncgen(result)
-            self.pending_generators[request_id] = (is_async, result)
-            await self.send(task_code, request_id, ASYNC_ITERATOR, (is_async, request_id))
+            push_or_pull = inspect.isasyncgen(result)
+            self.pending_results[request_id] = push_or_pull, result
+            await self.send(task_code, request_id, ASYNC_ITERATOR, (push_or_pull, request_id))
         else:
             await self.send(task_code, request_id, OK, result)
 
@@ -183,6 +190,8 @@ class ClientSession:
                     await self.cancel_running_task(request_id)
                 elif task_code == ITER_ASYNC_ITERATOR:
                     self.iterate_generator(request_id, *payload)
+                elif task_code == COROUTINE:
+                    self.evaluate_coroutine(request_id, *payload)
                 elif task_code == GET_ATTRIBUTE:
                     await self.get_attribute(request_id, *payload)
                 elif task_code == SET_ATTRIBUTE:

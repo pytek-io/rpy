@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 
 OK = "OK"
+COROUTINE = "Coroutine"
 CLOSE_SENTINEL = "Close sentinel"
 CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
@@ -33,7 +34,7 @@ GET_ATTRIBUTE = "Get attribute"
 SET_ATTRIBUTE = "Set attribute"
 ASYNC_ITERATOR = "Async iterator"
 MOVE_ASYNC_ITERATOR = "Move Async iterator"
-METHOD = "Function"
+METHOD = "Method"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
 STREAM_BUFFER_SIZE = 10
 
@@ -45,7 +46,15 @@ This is because it is not a good practice not too wait until a remote operation 
 
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
 
-REQUEST_CODES = (METHOD, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE, ITER_ASYNC_ITERATOR)
+REQUEST_CODES = (
+    METHOD,
+    GET_ATTRIBUTE,
+    CREATE_OBJECT,
+    FETCH_OBJECT,
+    SET_ATTRIBUTE,
+    ITER_ASYNC_ITERATOR,
+    COROUTINE,
+)
 
 
 class IterationBufferSync(AsyncSink):
@@ -100,11 +109,8 @@ class AsyncCallResult(AsyncIterable):
 
     def __await__(self):
         return asyncio.create_task(
-            self.client.execute_request(
-                METHOD,
-                (self.object_id, self.function, self.args, self.kwargs),
-                is_cancellable=True,
-                include_code=False,
+            self.client._evaluate_async_method(
+                self.object_id, self.function, self.args, self.kwargs
             )
         ).__await__()
 
@@ -115,7 +121,7 @@ class AsyncCallResult(AsyncIterable):
 
 
 def decode_result(code, result, include_code=True):
-    if code in (CANCELLED_TASK, OK, ASYNC_ITERATOR):
+    if code in (CANCELLED_TASK, OK, ASYNC_ITERATOR, COROUTINE):
         return (code, result) if include_code else result
     if code == EXCEPTION:
         raise result
@@ -126,7 +132,9 @@ def decode_result(code, result, include_code=True):
 def decode_iteration_result(code, result):
     if code in (CLOSE_SENTINEL, CANCELLED_TASK):
         return True, None
-    return False, decode_result(code, result, include_code=False)
+    if code == EXCEPTION:
+        raise result
+    return False, result
 
 
 class RemoteObject:
@@ -204,6 +212,22 @@ class AsyncClient:
     async def _cancel_request(self, request_id: int):
         self._cancel_request_no_wait(request_id)
         await self.connection.drain()
+
+    async def _evaluate_async_method(self, object_id, function, args, kwargs):
+        code, result = await self.execute_request(
+            METHOD,
+            (object_id, function, args, kwargs),
+            is_cancellable=True,
+            include_code=True,
+        )
+        if code == COROUTINE:
+            result = await self.execute_request(
+                COROUTINE,
+                (result,),
+                is_cancellable=True,
+                include_code=False,
+            )
+        return result
 
     async def _evaluate_async_generator(self, object_id, function, args, kwargs):
         push_or_pull, generator_id = await self.execute_request(
