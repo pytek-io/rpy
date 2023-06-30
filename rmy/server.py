@@ -14,9 +14,11 @@ import asyncstdlib
 
 from .abc import Connection
 from .client_async import (
-    ASYNC_ITERATOR,
+    ASYNC_GENERATOR,
+    SYNC_GENERATOR,
     CANCELLED_TASK,
     CLOSE_SENTINEL,
+    COROUTINE,
     CREATE_OBJECT,
     DELETE_OBJECT,
     EXCEPTION,
@@ -26,8 +28,8 @@ from .client_async import (
     METHOD,
     MOVE_ASYNC_ITERATOR,
     OK,
-    COROUTINE,
     SET_ATTRIBUTE,
+    VALUE,
 )
 from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
 from .connection import TCPConnection
@@ -81,10 +83,9 @@ class ClientSession:
     def iterate_generator(self, request_id: int, iterator_id: int):
         if not (generator := self.pending_results.pop(iterator_id, None)):
             return
-        push, generator = generator
         method = (
             self.iterate_through_async_generator_unsync
-            if push
+            if inspect.isasyncgen(generator)
             else self.iterate_through_async_generator_sync
         )
         self.cancellable_run_task(
@@ -169,23 +170,25 @@ class ClientSession:
             index_and_event[0] = index
             index_and_event[1] = anyio.Event()
 
-    async def evaluate_method(self, request_id, task_code, object_id, method, args, kwargs):
+    async def evaluate_method(self, request_id, object_id, method, args, kwargs):
         result = method(self.session_manager.objects[object_id], *args, **kwargs)
+        code = VALUE
         if inspect.iscoroutine(result):
+            code = COROUTINE
+        elif inspect.isasyncgen(result):
+            code = ASYNC_GENERATOR
+        elif inspect.isgenerator(result):
+            code = SYNC_GENERATOR
+        if code != VALUE:
             self.pending_results[request_id] = result
-            await self.send(task_code, request_id, COROUTINE, request_id)
-        elif inspect.isasyncgen(result) or inspect.isgenerator(result):
-            push_or_pull = inspect.isasyncgen(result)
-            self.pending_results[request_id] = push_or_pull, result
-            await self.send(task_code, request_id, ASYNC_ITERATOR, (push_or_pull, request_id))
-        else:
-            await self.send(task_code, request_id, OK, result)
+            result = request_id
+        await self.send(METHOD, request_id, code, result)
 
     async def process_messages(self):
         async for task_code, request_id, payload in self.connection:
             try:
                 if task_code == METHOD:
-                    await self.evaluate_method(request_id, task_code, *payload)
+                    await self.evaluate_method(request_id, *payload)
                 elif task_code == CANCELLED_TASK:
                     await self.cancel_running_task(request_id)
                 elif task_code == ITER_ASYNC_ITERATOR:

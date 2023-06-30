@@ -7,7 +7,7 @@ import queue
 from collections.abc import AsyncIterable
 from functools import partial
 from itertools import count
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 import anyio
 import anyio.abc
@@ -21,9 +21,12 @@ from .connection import connect_to_tcp_server
 if TYPE_CHECKING:
     from .client_sync import SyncClient
 
+VALUE = "Value"
+COROUTINE = "Coroutine"
+ASYNC_GENERATOR = "Async generator"
+SYNC_GENERATOR = "Sync generator"
 
 OK = "OK"
-COROUTINE = "Coroutine"
 CLOSE_SENTINEL = "Close sentinel"
 CANCELLED_TASK = "Cancelled task"
 EXCEPTION = "Exception"
@@ -32,7 +35,6 @@ DELETE_OBJECT = "Delete object"
 FETCH_OBJECT = "Fetch object"
 GET_ATTRIBUTE = "Get attribute"
 SET_ATTRIBUTE = "Set attribute"
-ASYNC_ITERATOR = "Async iterator"
 MOVE_ASYNC_ITERATOR = "Move Async iterator"
 METHOD = "Method"
 ITER_ASYNC_ITERATOR = "Iter async iterator"
@@ -121,7 +123,7 @@ class AsyncCallResult(AsyncIterable):
 
 
 def decode_result(code, result, include_code=True):
-    if code in (CANCELLED_TASK, OK, ASYNC_ITERATOR, COROUTINE):
+    if code in (CANCELLED_TASK, VALUE, ASYNC_GENERATOR, SYNC_GENERATOR, COROUTINE, OK):
         return (code, result) if include_code else result
     if code == EXCEPTION:
         raise result
@@ -230,11 +232,11 @@ class AsyncClient:
         return result
 
     async def _evaluate_async_generator(self, object_id, function, args, kwargs):
-        push_or_pull, generator_id = await self.execute_request(
+        code, generator_id = await self.execute_request(
             METHOD,
             (object_id, function, args, kwargs),
             is_cancellable=True,
-            include_code=False,
+            include_code=True,
         )
         queue = IterationBufferAsync(self._async_buffer_size)
         request_id = next(self.request_id)
@@ -247,7 +249,7 @@ class AsyncClient:
                     if terminated:
                         break
                     yield value
-                    if not push_or_pull:
+                    if code == SYNC_GENERATOR:
                         await self._send(MOVE_ASYNC_ITERATOR, generator_id, (index + 1,))
             finally:
                 await self._cancel_request(request_id)
