@@ -45,7 +45,7 @@ This is because it is not a good practice not too wait until a remote operation 
 
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
 
-REQUEST_CODES = (METHOD, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE)
+REQUEST_CODES = (METHOD, GET_ATTRIBUTE, CREATE_OBJECT, FETCH_OBJECT, SET_ATTRIBUTE, ITER_ASYNC_ITERATOR)
 
 
 class IterationBufferSync(AsyncSink):
@@ -54,7 +54,7 @@ class IterationBufferSync(AsyncSink):
         self._size = size
         self._queue = queue.SimpleQueue()
 
-    def send_nowait(self, value: Any):
+    def set_result(self, value: Any):
         self._queue.put_nowait(value)
         if self._queue.qsize() >= self._size:
             self._overflowed = True
@@ -74,7 +74,7 @@ class IterationBufferAsync(AsyncSink):
         self._overflowed = False
         self._queue = asyncio.Queue(maxsize=size)
 
-    def send_nowait(self, value: Any):
+    def set_result(self, value: Any):
         try:
             self._queue.put_nowait(value)
         except asyncio.QueueFull:
@@ -148,7 +148,6 @@ class AsyncClient:
         self.request_id = count()
         self.object_id = count()
         self.pending_requests = {}
-        self._iteraton_buffers: Dict[int, AsyncSink] = {}
         self.remote_objects = {}
 
     async def _send(self, *args):
@@ -165,9 +164,6 @@ class AsyncClient:
             if code in REQUEST_CODES:
                 if future := self.pending_requests.get(message_id):
                     future.set_result((status, result))
-            elif code == ITER_ASYNC_ITERATOR:
-                if queue := self._iteraton_buffers.get(message_id):
-                    queue.send_nowait((status, result))
             elif code == CANCELLED_TASK:
                 print("Task cancelled.", message_id, status, result)
             else:
@@ -175,8 +171,8 @@ class AsyncClient:
 
     @contextlib.contextmanager
     def _submit_request(self, code, args, is_cancellable=False):
-        request_id = next(self.request_id)
         future = asyncio.Future()
+        request_id = next(self.request_id)
         with scoped_insert(self.pending_requests, request_id, future):
             self._send_nowait(code, request_id, args)
             try:
@@ -218,7 +214,7 @@ class AsyncClient:
         )
         queue = IterationBufferAsync(self._async_buffer_size)
         request_id = next(self.request_id)
-        with scoped_insert(self._iteraton_buffers, request_id, queue):
+        with scoped_insert(self.pending_requests, request_id, queue):
             await self._send(ITER_ASYNC_ITERATOR, request_id, (generator_id,))
             try:
                 async for index, (terminated, value) in asyncstdlib.enumerate(
@@ -236,7 +232,7 @@ class AsyncClient:
     async def _remote_sync_generator_iter(self, iterator_id: int):
         queue = IterationBufferSync(self._async_buffer_size)
         request_id = next(self.request_id)
-        with scoped_insert(self._iteraton_buffers, request_id, queue):
+        with scoped_insert(self.pending_requests, request_id, queue):
             try:
                 await self._send(ITER_ASYNC_ITERATOR, request_id, (iterator_id,))
                 yield queue

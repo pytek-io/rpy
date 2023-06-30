@@ -4,4 +4,4 @@
 [![test suite](https://github.com/pytek-io/rmy/actions/workflows/main.yml/badge.svg)](https://github.com/pytek-io/rmy/actions/workflows/main.yml)
 [![Coverage Status](https://coveralls.io/repos/github/pytek-io/rmy/badge.svg?branch=main)](https://coveralls.io/github/pytek-io/rmy?branch=main)
 
-An asyncio compatible framework to build advanced distributed systems. 
+An asyncio compatible framework to build advanced distributed systems.

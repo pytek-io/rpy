@@ -24,5 +24,5 @@ class Connection(AsyncIterator[Any], metaclass=ABCMeta):
 
 class AsyncSink:
     @abstractmethod
-    def send_nowait(self, value: Any):
+    def set_result(self, value: Any):
         ...
