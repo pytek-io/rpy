@@ -10,7 +10,6 @@ from tests.utils_sync import enumerate, scoped_iter, sleep
 
 
 
-
 def test_async_generator():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         for i, value in enumerate(proxy.count(10)):

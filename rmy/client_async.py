@@ -1,10 +1,10 @@
 from __future__ import annotations
-
 import asyncio
 import contextlib
 import inspect
+import io
+import pickle
 import queue
-from collections.abc import AsyncIterable
 from functools import partial
 from itertools import count
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
@@ -22,22 +22,22 @@ if TYPE_CHECKING:
     from .client_sync import SyncClient
 
 VALUE = "Value"
-COROUTINE = "Coroutine"
+AWAIT_COROUTINE = "Coroutine"
 ASYNC_GENERATOR = "Async generator"
 SYNC_GENERATOR = "Sync generator"
 
 OK = "OK"
 CLOSE_SENTINEL = "Close sentinel"
-CANCELLED_TASK = "Cancelled task"
+CANCEL_TASK = "Cancel task"
 EXCEPTION = "Exception"
 CREATE_OBJECT = "Create object"
 DELETE_OBJECT = "Delete object"
 FETCH_OBJECT = "Fetch object"
 GET_ATTRIBUTE = "Get attribute"
 SET_ATTRIBUTE = "Set attribute"
-MOVE_ASYNC_ITERATOR = "Move Async iterator"
-METHOD = "Method"
-ITER_ASYNC_ITERATOR = "Iter async iterator"
+MOVE_GENERATOR_ITERATOR = "Move Async iterator"
+EVALUATE_METHOD = "Evaluate method"
+ITERATE_GENERATOR = "Iterate generator"
 STREAM_BUFFER_SIZE = 10
 
 SERVER_OBJECT_ID = 0
@@ -49,13 +49,13 @@ This is because it is not a good practice not too wait until a remote operation 
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
 
 REQUEST_CODES = (
-    METHOD,
+    EVALUATE_METHOD,
     GET_ATTRIBUTE,
     CREATE_OBJECT,
     FETCH_OBJECT,
     SET_ATTRIBUTE,
-    ITER_ASYNC_ITERATOR,
-    COROUTINE,
+    ITERATE_GENERATOR,
+    AWAIT_COROUTINE,
 )
 
 
@@ -101,7 +101,77 @@ class IterationBufferAsync(AsyncSink):
         return await self._queue.get()
 
 
-class AsyncCallResult(AsyncIterable):
+class SerializableValue:
+    def __init__(self, value, client=None):
+        self.value_id = value
+        self.client: AsyncClient = client
+
+
+class BaseRemoteGenerator(SerializableValue):
+    pass
+
+
+class RemoteAsyncGenerator(BaseRemoteGenerator):
+    pass
+
+
+class RemoteSyncGenerator(BaseRemoteGenerator):
+    pass
+
+
+class RemoteCoroutine(SerializableValue):
+    def __await__(self):
+        return asyncio.create_task(
+            self.client.execute_request(
+                AWAIT_COROUTINE,
+                (self.value_id,),
+                is_cancellable=True,
+                include_code=False,
+            )
+        ).__await__()
+
+    async def value(self):
+        return await self
+
+
+class Value:
+    def __init__(self, value):
+        self.value = value
+
+
+class RMYPickler(pickle.Pickler):
+    def persistent_id(self, obj):
+        if isinstance(obj, (RemoteAsyncGenerator, RemoteSyncGenerator, RemoteCoroutine)):
+            return (type(obj).__name__, obj.value_id)
+
+
+class RemoteUnpickler(pickle.Unpickler):
+    def __init__(self, file, client):
+        super().__init__(file)
+        self.client = client
+
+    def persistent_load(self, value):
+        type_tag, value_id = value
+        if type_tag in ("RemoteAsyncGenerator", "RemoteSyncGenerator"):
+            synchronize = type_tag == "RemoteSyncGenerator"
+            if self.client.client_sync:
+                return self.client.client_sync._sync_generator_iter(synchronize, value_id)
+            return self.client.fetch_values_async(synchronize, value_id)
+        elif type_tag == "RemoteCoroutine":
+            if self.client.client_sync:
+                return RemoteCoroutine(value_id, self.client)
+            return RemoteCoroutine(value_id, self.client)
+        else:
+            raise pickle.UnpicklingError("Unsupported object")
+
+
+def dumps(value):
+    file = io.BytesIO()
+    RMYPickler(file).dump(value)
+    return file.getvalue()
+
+
+class AsyncCallResult:
     def __init__(self, client, object_id: int, function: Callable, args, kwargs):
         self.client: AsyncClient = client
         self.object_id = object_id
@@ -110,10 +180,8 @@ class AsyncCallResult(AsyncIterable):
         self.kwargs = kwargs
 
     def __await__(self):
-        return asyncio.create_task(
-            self.client._evaluate_async_method(
-                self.object_id, self.function, self.args, self.kwargs
-            )
+        return self.client._evaluate_async_method(
+            self.object_id, self.function, self.args, self.kwargs
         ).__await__()
 
     def __aiter__(self):
@@ -123,16 +191,16 @@ class AsyncCallResult(AsyncIterable):
 
 
 def decode_result(code, result, include_code=True):
-    if code in (CANCELLED_TASK, VALUE, ASYNC_GENERATOR, SYNC_GENERATOR, COROUTINE, OK):
+    if code in (CANCEL_TASK, VALUE, ASYNC_GENERATOR, SYNC_GENERATOR, AWAIT_COROUTINE, OK):
         return (code, result) if include_code else result
     if code == EXCEPTION:
-        raise result
+        raise result if isinstance(result, Exception) else Exception(result)
     else:
         raise Exception(f"Unexpected code {code} received.")
 
 
 def decode_iteration_result(code, result):
-    if code in (CLOSE_SENTINEL, CANCELLED_TASK):
+    if code in (CLOSE_SENTINEL, CANCEL_TASK):
         return True, None
     if code == EXCEPTION:
         raise result
@@ -153,12 +221,14 @@ class AsyncClient:
     def __init__(
         self, connection: Connection, async_buffer_size: int = STREAM_BUFFER_SIZE
     ) -> None:
+        connection.set_loads(lambda value: RemoteUnpickler(io.BytesIO(value), self).load())
         self.connection = connection
         self._async_buffer_size = async_buffer_size
         self.request_id = count()
         self.object_id = count()
         self.pending_requests = {}
         self.remote_objects = {}
+        self.client_sync: Optional[SyncClient] = None
 
     async def _send(self, *args):
         await self.connection.send(args)
@@ -174,7 +244,7 @@ class AsyncClient:
             if code in REQUEST_CODES:
                 if future := self.pending_requests.get(message_id):
                     future.set_result((status, result))
-            elif code == CANCELLED_TASK:
+            elif code == CANCEL_TASK:
                 print("Task cancelled.", message_id, status, result)
             else:
                 print(f"Unexpected code {code} received.")
@@ -208,7 +278,7 @@ class AsyncClient:
         return AsyncCallResult(self, object_id, function, args, kwargs)
 
     def _cancel_request_no_wait(self, request_id: int):
-        self._send_nowait(CANCELLED_TASK, request_id, None)
+        self._send_nowait(CANCEL_TASK, request_id, None)
         self.pending_requests.pop(request_id, None)
 
     async def _cancel_request(self, request_id: int):
@@ -216,32 +286,22 @@ class AsyncClient:
         await self.connection.drain()
 
     async def _evaluate_async_method(self, object_id, function, args, kwargs):
-        code, result = await self.execute_request(
-            METHOD,
+        result = await self.execute_request(
+            EVALUATE_METHOD,
             (object_id, function, args, kwargs),
             is_cancellable=True,
-            include_code=True,
+            include_code=False,
         )
-        if code == COROUTINE:
-            result = await self.execute_request(
-                COROUTINE,
-                (result,),
-                is_cancellable=True,
-                include_code=False,
-            )
-        return result
+        if isinstance(result, RemoteCoroutine):
+            return await result
+        if isinstance(result, Value):
+            return result.value
 
-    async def _evaluate_async_generator(self, object_id, function, args, kwargs):
-        code, generator_id = await self.execute_request(
-            METHOD,
-            (object_id, function, args, kwargs),
-            is_cancellable=True,
-            include_code=True,
-        )
+    async def fetch_values_async(self, synchronize: bool, value_id: int):
         queue = IterationBufferAsync(self._async_buffer_size)
         request_id = next(self.request_id)
         with scoped_insert(self.pending_requests, request_id, queue):
-            await self._send(ITER_ASYNC_ITERATOR, request_id, (generator_id,))
+            await self._send(ITERATE_GENERATOR, request_id, (value_id,))
             try:
                 async for index, (terminated, value) in asyncstdlib.enumerate(
                     asyncstdlib.starmap(decode_iteration_result, queue)
@@ -249,10 +309,20 @@ class AsyncClient:
                     if terminated:
                         break
                     yield value
-                    if code == SYNC_GENERATOR:
-                        await self._send(MOVE_ASYNC_ITERATOR, generator_id, (index + 1,))
+                    if synchronize:
+                        await self._send(MOVE_GENERATOR_ITERATOR, value_id, (index + 1,))
             finally:
                 await self._cancel_request(request_id)
+
+    async def _evaluate_async_generator(self, object_id, function, args, kwargs):
+        generator = await self.execute_request(
+            EVALUATE_METHOD,
+            (object_id, function, args, kwargs),
+            is_cancellable=True,
+            include_code=False,
+        )
+        async for value in generator:
+            yield value
 
     @contextlib.asynccontextmanager
     async def _remote_sync_generator_iter(self, iterator_id: int):
@@ -260,7 +330,7 @@ class AsyncClient:
         request_id = next(self.request_id)
         with scoped_insert(self.pending_requests, request_id, queue):
             try:
-                await self._send(ITER_ASYNC_ITERATOR, request_id, (iterator_id,))
+                await self._send(ITERATE_GENERATOR, request_id, (iterator_id,))
                 yield queue
             finally:
                 await self._cancel_request(request_id)

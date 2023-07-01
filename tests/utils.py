@@ -28,23 +28,31 @@ class TestConnection(rmy.abc.Connection):
         self.sink = sink
         self.stream = stream
         self._closed = anyio.Event()
+        self.dumps = dumps
+        self.loads = loads
+
+    def set_dumps(self, dumps):
+        self.dumps = dumps
+
+    def set_loads(self, loads):
+        self.loads = loads
 
     def send_nowait(self, message: Tuple[Any, ...]):
-        return self.sink.send_nowait(dumps(message))
+        return self.sink.send_nowait(self.dumps(message))
 
     async def drain(self):
         await anyio.lowlevel.checkpoint()
 
     async def send(self, message):
         try:
-            await self.sink.send(dumps(message))
+            await self.sink.send(self.dumps(message))
         except anyio.get_cancelled_exc_class():
             print(f"Sending {message} has been cancelled. {self} did not send anything.")
         except (anyio.BrokenResourceError, anyio.ClosedResourceError):
             print(f"Sending {message} failed, {self.name} did not send anything.")
 
     async def __anext__(self) -> Any:
-        return loads(await self.stream.receive())
+        return self.loads(await self.stream.receive())
 
     def __aiter__(self) -> AsyncIterator[Any]:
         return self
@@ -117,7 +125,10 @@ def create_test_sync_clients(server_object, nb_clients: int = 1) -> Iterator[Lis
         with portal.wrap_async_context_manager(
             create_test_async_clients(server_object, nb_clients)
         ) as async_clients:
-            yield [SyncClient(portal, client) for client in async_clients]
+            sync_clients = [SyncClient(portal, async_client) for async_client in async_clients]
+            for sync_client, async_client in zip(sync_clients, async_clients):
+                async_client.client_sync = sync_client
+            yield sync_clients
 
 
 @contextlib.asynccontextmanager
@@ -168,8 +179,6 @@ class RemoteObject:
                 await anyio.sleep(A_LITTLE_BIT_OF_TIME)
                 self.current_value = i
                 yield i
-        except GeneratorExit:
-            print("Generator exit")
         finally:
             self.finally_called = True
 
