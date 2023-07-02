@@ -10,8 +10,6 @@ from .client_async import (
     MOVE_GENERATOR_ITERATOR,
     SERVER_OBJECT_ID,
     AsyncClient,
-    RemoteCoroutine,
-    Value,
     connect,
     decode_iteration_result,
 )

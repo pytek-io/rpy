@@ -22,10 +22,6 @@ from .connection import connect_to_tcp_server
 if TYPE_CHECKING:
     from .client_sync import SyncClient
 
-VALUE = "Value"
-AWAIT_COROUTINE = "Coroutine"
-ASYNC_GENERATOR = "Async generator"
-SYNC_GENERATOR = "Sync generator"
 
 OK = "OK"
 CLOSE_SENTINEL = "Close sentinel"
@@ -39,6 +35,7 @@ SET_ATTRIBUTE = "Set attribute"
 MOVE_GENERATOR_ITERATOR = "Move Async iterator"
 EVALUATE_METHOD = "Evaluate method"
 ITERATE_GENERATOR = "Iterate generator"
+AWAIT_COROUTINE = "Await coroutine"
 STREAM_BUFFER_SIZE = 10
 
 SERVER_OBJECT_ID = 0
@@ -119,17 +116,11 @@ class RemoteCoroutine(RemoteValue):
     pass
 
 
-class Value:
-    def __init__(self, value):
-        self.value = value
-
-
 class RMYPickler(pickle.Pickler):
     def persistent_id(self, obj):
-        if isinstance(obj, (RemoteAsyncGenerator, RemoteSyncGenerator, RemoteCoroutine)):
+        if isinstance(obj, RemoteValue):
             return (type(obj).__name__, obj.value_id)
-        if isinstance(obj, Value):
-            return ("Value", obj.value)
+
 
 class RemoteUnpickler(pickle.Unpickler):
     def __init__(self, file, client):
@@ -150,8 +141,6 @@ class RemoteUnpickler(pickle.Unpickler):
                 is_cancellable=True,
                 include_code=False,
             )
-        elif type_tag == "Value":
-            return payload
         else:
             raise pickle.UnpicklingError("Unsupported object")
 
@@ -182,7 +171,7 @@ class AsyncCallResult:
 
 
 def decode_result(code, result, include_code=True):
-    if code in (CANCEL_TASK, VALUE, ASYNC_GENERATOR, SYNC_GENERATOR, AWAIT_COROUTINE, OK):
+    if code in (CANCEL_TASK, OK):
         return (code, result) if include_code else result
     if code == EXCEPTION:
         raise result if isinstance(result, Exception) else Exception(result)
