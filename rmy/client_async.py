@@ -102,33 +102,21 @@ class IterationBufferAsync(AsyncSink):
         return await self._queue.get()
 
 
-class RemoteAsyncGenerator:
+class RemoteValue:
     def __init__(self, value):
         self.value_id = value
 
 
-class RemoteSyncGenerator:
-    def __init__(self, value):
-        self.value_id = value
+class RemoteAsyncGenerator(RemoteValue):
+    pass
 
 
-class RemoteCoroutine:
-    def __init__(self, value, client=None):
-        self.value_id = value
-        self.client: AsyncClient = client
+class RemoteSyncGenerator(RemoteValue):
+    pass
 
-    def __await__(self):
-        return asyncio.create_task(
-            self.client._execute_request(
-                AWAIT_COROUTINE,
-                (self.value_id,),
-                is_cancellable=True,
-                include_code=False,
-            )
-        ).__await__()
 
-    async def value(self):
-        return await self
+class RemoteCoroutine(RemoteValue):
+    pass
 
 
 class Value:
@@ -140,7 +128,8 @@ class RMYPickler(pickle.Pickler):
     def persistent_id(self, obj):
         if isinstance(obj, (RemoteAsyncGenerator, RemoteSyncGenerator, RemoteCoroutine)):
             return (type(obj).__name__, obj.value_id)
-
+        if isinstance(obj, Value):
+            return ("Value", obj.value)
 
 class RemoteUnpickler(pickle.Unpickler):
     def __init__(self, file, client):
@@ -148,22 +137,21 @@ class RemoteUnpickler(pickle.Unpickler):
         self.client = client
 
     def persistent_load(self, value):
-        type_tag, value_id = value
+        type_tag, payload = value
         if type_tag in ("RemoteAsyncGenerator", "RemoteSyncGenerator"):
             synchronize = type_tag == "RemoteSyncGenerator"
             if self.client.client_sync:
-                return self.client.client_sync._sync_generator_iter(synchronize, value_id)
-            return self.client.fetch_values_async(synchronize, value_id)
+                return self.client.client_sync._sync_generator_iter(synchronize, payload)
+            return self.client.fetch_values_async(synchronize, payload)
         elif type_tag == "RemoteCoroutine":
-            # return self.client._execute_request(
-            #     AWAIT_COROUTINE,
-            #     (value_id,),
-            #     is_cancellable=True,
-            #     include_code=False,
-            # )
-            if self.client.client_sync:
-                return RemoteCoroutine(value_id, self.client)
-            return RemoteCoroutine(value_id, self.client)
+            return self.client._execute_request(
+                AWAIT_COROUTINE,
+                (payload,),
+                is_cancellable=True,
+                include_code=False,
+            )
+        elif type_tag == "Value":
+            return payload
         else:
             raise pickle.UnpicklingError("Unsupported object")
 
@@ -295,10 +283,9 @@ class AsyncClient:
             is_cancellable=True,
             include_code=False,
         )
-        if isinstance(result, RemoteCoroutine):
-            return await result
-        if isinstance(result, Value):
-            return result.value
+        if inspect.iscoroutine(result):
+            result = await result
+        return result
 
     async def fetch_values_async(self, synchronize: bool, value_id: int):
         queue = IterationBufferAsync(self._async_buffer_size)

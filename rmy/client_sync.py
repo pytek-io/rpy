@@ -1,5 +1,6 @@
 import contextlib
 import itertools
+import inspect
 from typing import Iterator
 
 import anyio
@@ -14,6 +15,9 @@ from .client_async import (
     connect,
     decode_iteration_result,
 )
+
+async def await_awaitable(awaitable):
+    return await awaitable
 
 
 class SyncClient:
@@ -48,10 +52,8 @@ class SyncClient:
                 False,
                 False,
             )
-            if isinstance(result, RemoteCoroutine):
-                return self.portal.call(result.value)
-            if isinstance(result, Value):
-                return result.value
+            if inspect.iscoroutine(result):
+                result = self.portal.call(await_awaitable, result)
             return result
 
         return result

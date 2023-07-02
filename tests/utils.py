@@ -52,7 +52,10 @@ class TestConnection(rmy.abc.Connection):
             print(f"Sending {message} failed, {self.name} did not send anything.")
 
     async def __anext__(self) -> Any:
-        return self.loads(await self.stream.receive())
+        try:
+            return self.loads(await self.stream.receive())
+        except anyio.EndOfStream:
+            raise StopAsyncIteration
 
     def __aiter__(self) -> AsyncIterator[Any]:
         return self
