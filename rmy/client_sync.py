@@ -5,14 +5,12 @@ from typing import Iterator
 import anyio
 
 from .client_async import (
-    ASYNC_GENERATOR,
-    AWAIT_COROUTINE,
     EVALUATE_METHOD,
     MOVE_GENERATOR_ITERATOR,
     SERVER_OBJECT_ID,
-    SYNC_GENERATOR,
-    VALUE,
     AsyncClient,
+    RemoteCoroutine,
+    Value,
     connect,
     decode_iteration_result,
 )
@@ -43,19 +41,18 @@ class SyncClient:
 
     def _wrap_function(self, object_id, function):
         def result(*args, **kwargs):
-            code, result = self.portal.call(
-                self.async_client.execute_request,
+            result = self.portal.call(
+                self.async_client._execute_request,
                 EVALUATE_METHOD,
                 (object_id, function, args, kwargs),
+                False,
+                False,
             )
-            if code == VALUE:
-                return result.value
-            elif code in (ASYNC_GENERATOR, SYNC_GENERATOR):
-                return result
-            elif code == AWAIT_COROUTINE:
+            if isinstance(result, RemoteCoroutine):
                 return self.portal.call(result.value)
-            else:
-                raise Exception(f"Unexpected code: {code}")
+            if isinstance(result, Value):
+                return result.value
+            return result
 
         return result
 

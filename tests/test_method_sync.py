@@ -15,7 +15,6 @@ def test_async_method_exception():
             proxy.throw_exception_coroutine(exception)
 
 
-
 def test_sync_method():
     with create_proxy_object_sync(RemoteObject()) as proxy:
         value = "test"

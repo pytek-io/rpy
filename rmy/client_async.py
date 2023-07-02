@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import inspect
@@ -101,28 +102,24 @@ class IterationBufferAsync(AsyncSink):
         return await self._queue.get()
 
 
-class SerializableValue:
+class RemoteAsyncGenerator:
+    def __init__(self, value):
+        self.value_id = value
+
+
+class RemoteSyncGenerator:
+    def __init__(self, value):
+        self.value_id = value
+
+
+class RemoteCoroutine:
     def __init__(self, value, client=None):
         self.value_id = value
         self.client: AsyncClient = client
 
-
-class BaseRemoteGenerator(SerializableValue):
-    pass
-
-
-class RemoteAsyncGenerator(BaseRemoteGenerator):
-    pass
-
-
-class RemoteSyncGenerator(BaseRemoteGenerator):
-    pass
-
-
-class RemoteCoroutine(SerializableValue):
     def __await__(self):
         return asyncio.create_task(
-            self.client.execute_request(
+            self.client._execute_request(
                 AWAIT_COROUTINE,
                 (self.value_id,),
                 is_cancellable=True,
@@ -158,6 +155,12 @@ class RemoteUnpickler(pickle.Unpickler):
                 return self.client.client_sync._sync_generator_iter(synchronize, value_id)
             return self.client.fetch_values_async(synchronize, value_id)
         elif type_tag == "RemoteCoroutine":
+            # return self.client._execute_request(
+            #     AWAIT_COROUTINE,
+            #     (value_id,),
+            #     is_cancellable=True,
+            #     include_code=False,
+            # )
             if self.client.client_sync:
                 return RemoteCoroutine(value_id, self.client)
             return RemoteCoroutine(value_id, self.client)
@@ -165,7 +168,7 @@ class RemoteUnpickler(pickle.Unpickler):
             raise pickle.UnpicklingError("Unsupported object")
 
 
-def dumps(value):
+def rmy_dumps(value):
     file = io.BytesIO()
     RMYPickler(file).dump(value)
     return file.getvalue()
@@ -262,15 +265,15 @@ class AsyncClient:
                     self._cancel_request_no_wait(request_id)
                 raise
 
-    async def execute_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
+    async def _execute_request(self, code, args, is_cancellable=False, include_code=True) -> Any:
         with self._submit_request(code, args, is_cancellable) as future:
             return decode_result(*(await future), include_code=include_code)
 
     async def _get_attribute(self, object_id: int, name: str):
-        return await self.execute_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
+        return await self._execute_request(GET_ATTRIBUTE, (object_id, name), include_code=False)
 
     async def _set_attribute(self, object_id: int, name: str, value: Any):
-        return await self.execute_request(
+        return await self._execute_request(
             SET_ATTRIBUTE, (object_id, name, value), include_code=False
         )
 
@@ -286,7 +289,7 @@ class AsyncClient:
         await self.connection.drain()
 
     async def _evaluate_async_method(self, object_id, function, args, kwargs):
-        result = await self.execute_request(
+        result = await self._execute_request(
             EVALUATE_METHOD,
             (object_id, function, args, kwargs),
             is_cancellable=True,
@@ -315,7 +318,7 @@ class AsyncClient:
                 await self._cancel_request(request_id)
 
     async def _evaluate_async_generator(self, object_id, function, args, kwargs):
-        generator = await self.execute_request(
+        generator = await self._execute_request(
             EVALUATE_METHOD,
             (object_id, function, args, kwargs),
             is_cancellable=True,
@@ -339,7 +342,7 @@ class AsyncClient:
     async def create_remote_object(
         self, object_class, args=(), kwarg={}, sync_client: Optional[SyncClient] = None
     ):
-        object_id = await self.execute_request(
+        object_id = await self._execute_request(
             CREATE_OBJECT, (object_class, args, kwarg), include_code=False
         )
         try:
@@ -352,7 +355,9 @@ class AsyncClient:
         self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional[SyncClient] = None
     ) -> Any:
         if object_id not in self.remote_objects:
-            object_class = await self.execute_request(FETCH_OBJECT, object_id, include_code=False)
+            object_class = await self._execute_request(
+                FETCH_OBJECT, (object_id,), include_code=False
+            )
             setattr = partial(self._set_attribute, object_id)
             __getattr__ = partial(self._get_attribute, object_id)
             if sync_client:

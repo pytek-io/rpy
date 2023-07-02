@@ -13,7 +13,6 @@ import asyncstdlib
 
 from .abc import Connection
 from .client_async import (
-    ASYNC_GENERATOR,
     AWAIT_COROUTINE,
     CANCEL_TASK,
     CLOSE_SENTINEL,
@@ -27,13 +26,12 @@ from .client_async import (
     MOVE_GENERATOR_ITERATOR,
     OK,
     SET_ATTRIBUTE,
-    SYNC_GENERATOR,
     VALUE,
     RemoteAsyncGenerator,
     RemoteCoroutine,
     RemoteSyncGenerator,
     Value,
-    dumps,
+    rmy_dumps,
 )
 from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
 from .connection import TCPConnection
@@ -53,7 +51,7 @@ class ClientSession:
         self.session_manager: Server = server
         self.task_group = task_group
         self.connection = connection
-        connection.set_dumps(dumps)
+        connection.set_dumps(rmy_dumps)
         self.running_tasks = {}
         self.pending_results = {}
         self.own_objects = set()
@@ -178,21 +176,17 @@ class ClientSession:
 
     async def evaluate_method(self, request_id, object_id, method, args, kwargs):
         result = method(self.session_manager.objects[object_id], *args, **kwargs)
-        code = VALUE
         if inspect.iscoroutine(result):
-            code = AWAIT_COROUTINE
             serializable_result = RemoteCoroutine(next(self.value_id))
         elif inspect.isasyncgen(result):
-            code = ASYNC_GENERATOR
             serializable_result = RemoteAsyncGenerator(next(self.value_id))
         elif inspect.isgenerator(result):
-            code = SYNC_GENERATOR
             serializable_result = RemoteSyncGenerator(next(self.value_id))
         else:
             serializable_result = Value(result)
-        if code != VALUE:
+        if not isinstance(serializable_result, Value):
             self.pending_results[serializable_result.value_id] = result
-        await self.send(EVALUATE_METHOD, request_id, code, serializable_result)
+        await self.send(EVALUATE_METHOD, request_id, VALUE, serializable_result)
 
     async def process_messages(self):
         async for task_code, request_id, payload in self.connection:
@@ -212,7 +206,7 @@ class ClientSession:
                 elif task_code == CREATE_OBJECT:
                     await self.create_object(request_id, *payload)
                 elif task_code == FETCH_OBJECT:
-                    await self.fetch_object(request_id, payload)
+                    await self.fetch_object(request_id, *payload)
                 elif task_code == MOVE_GENERATOR_ITERATOR:
                     self.move_async_generator_index(request_id, *payload)
                 elif task_code == DELETE_OBJECT:
