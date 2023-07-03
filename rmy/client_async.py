@@ -9,13 +9,14 @@ import queue
 from functools import partial
 from itertools import count
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
+import traceback
 
 import anyio
 import anyio.abc
 import asyncstdlib
 
 from .abc import AsyncSink, Connection
-from .common import cancel_task_on_exit, scoped_insert
+from .common import cancel_task_on_exit, scoped_insert, RemoteException
 from .connection import connect_to_tcp_server
 
 
@@ -174,6 +175,9 @@ def decode_result(code, result, include_code=True):
     if code in (CANCEL_TASK, OK):
         return (code, result) if include_code else result
     if code == EXCEPTION:
+        if isinstance(result, RemoteException):
+            traceback.print_list(result.args[1])
+            raise result.args[0]
         raise result if isinstance(result, Exception) else Exception(result)
     else:
         raise Exception(f"Unexpected code {code} received.")
@@ -183,7 +187,10 @@ def decode_iteration_result(code, result):
     if code in (CLOSE_SENTINEL, CANCEL_TASK):
         return True, None
     if code == EXCEPTION:
-        raise result
+        if isinstance(result, RemoteException):
+            traceback.print_list(result.args[1])
+            raise result.args[0]
+        raise result if isinstance(result, Exception) else Exception(result)
     return False, result
 
 
