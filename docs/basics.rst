@@ -5,7 +5,7 @@ Overview
 Calling a method remotely
 -------------------------
 
-The simplest possible RMY application looks like this:
+The simplest possible use of RMY framework looks like this:
 
 ..  code-block:: python
 
@@ -20,7 +20,7 @@ The simplest possible RMY application looks like this:
         rmy.run_tcp_server(8080, Demo())
 
 
-The `run_tcp_server` method will expose an instance of the `Demo` object which can then be remotely accessed to as follows.
+This will expose an instance of the `Demo` object which can then be remotely accessed to as follows.
 
 .. code-block:: python
 
@@ -36,13 +36,13 @@ The `run_tcp_server` method will expose an instance of the `Demo` object which c
                 print(proxy.greet(name))
 
 
-The object returned `fetch_remote_object` call is a proxy object which has the *almost* same interface as the one that is being shared which is therefore type-hinted as `Demo`. As a sharp reader/linter would notice the `greet` method is an asynchronous method which we call synchronously. This is because of the fact we connected through a synchronous client. If we use `create_async_client` instead, the `greet` method will remain asynchronous. 
+The object returned `fetch_remote_object` call is a proxy object which has the *almost* same interface as the one that is being shared which is therefore type-hinted as `Demo`. As a sharp reader/linter would notice the `greet` method is an asynchronous method which we call synchronously. This is because of the fact we connected through a synchronous client. If we would use `create_async_client` instead, the `greet` method will remain asynchronous.
 
 
 Iterating remotely
 ------------------
 
-One can also remotely iterate asynchronously through data returned by the shared object. For example if we add the following method to our Demo class.
+One can also remotely iterate remotely through data returned by the shared object. For example if we add the following method to our Demo class.
 
 .. code-block:: python
 
@@ -122,7 +122,7 @@ Then the following code will print the exception message.
 Loop synchronization
 --------------------
 
-Because of their very nature asynchronous iterators are prone to synchronization issues in which the producer is faster than the consumer. This cause data to accumulate in some part of the system and can lead to out of memory errors if not properly controlled. To ensure maximum stability, RMY will always eagerly push data to the client which buffers them. If a buffer becomes full, the client code will receive a `BufferFullError` exception.
+Because of their very nature asynchronous iterators are prone to synchronization issues in which the producer is faster than the consumer. This cause data to accumulate in some part of the system and can lead to out of memory errors if not properly controlled. RMY will always eagerly iterate through asynchronous generators and send data to the client which buffers them. If a buffer becomes full, the client code will receive a `BufferFullError` exception.
 
 .. code-block:: python
 
@@ -145,7 +145,15 @@ Then if we try to iterate through the results as follows, we will get a `BufferF
                 time.sleep(1)
                 print(i)
 
-To avoid this issue, we can either increase the buffer size. Note that in this slightly contrieved example, the exposed generator is asynchronous although it does not really need to be so. In this case we can simply use a synchronous generator which will synchronized with the client code avoiding any of this issues.
+To avoid this issue, we can either increase the buffer size. Note that in this slightly contrieved example, the exposed generator is asynchronous although it does not really need to be so. In this case we can wrap our async generator in a `RemoteGeneratorPull`.
+
+.. code-block:: python
+
+    class Demo:
+        ...
+        async def count(self):
+            for i in range(1000000):
+                yield i
 
 
 Cancellation and early exits
