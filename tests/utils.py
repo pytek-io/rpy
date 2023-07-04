@@ -91,11 +91,10 @@ def create_test_connection(
 @contextlib.contextmanager
 def test_exception():
     exception = RuntimeError(ERROR_MESSAGE)
-    with pytest.raises(RemoteException) as e_info:
+    with pytest.raises(RuntimeError) as e_info:
         yield exception
-        returned_exception = e_info.value.args[0]
-        assert isinstance(returned_exception, type(exception))
-        assert returned_exception.args[0] == exception.args[0]
+        assert isinstance(e_info.value, type(exception))
+        assert e_info.value.args[0] == exception.args[0]
 
 
 @contextlib.asynccontextmanager

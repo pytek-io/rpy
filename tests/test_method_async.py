@@ -20,7 +20,6 @@ async def test_async_method_exception():
             await proxy.throw_exception_coroutine(exception)
 
 
-
 async def test_sync_method():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         value = "test"

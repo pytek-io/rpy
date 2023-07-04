@@ -3,9 +3,9 @@ import pytest
 from tests.utils import (
     ASYNC_GENERATOR_OVERFLOWED_MESSAGE,
     ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS,
-    ERROR_MESSAGE,
     RemoteObject,
     create_proxy_object_async,
+    test_exception,
 )
 from tests.utils_async import enumerate, scoped_iter, sleep
 
@@ -26,17 +26,12 @@ async def test_sync_generator():
 
 
 async def test_async_generator_exception():
-    exception = RuntimeError(ERROR_MESSAGE)
     async with create_proxy_object_async(RemoteObject()) as proxy:
-        with pytest.raises(Exception) as e_info:
-            async with scoped_iter(
-                proxy.async_generator_exception(RuntimeError(ERROR_MESSAGE))
-            ) as stream:
+        with test_exception() as exception:
+            async with scoped_iter(proxy.async_generator_exception(exception)) as stream:
                 async for i, value in enumerate(stream):
                     assert i == value
-        returned_exception = e_info.value.args[0]
-        assert isinstance(returned_exception, type(exception))
-        assert returned_exception.args[0] == exception.args[0]
+
 
 async def test_stream_early_exit():
     async with create_proxy_object_async(RemoteObject()) as proxy:
