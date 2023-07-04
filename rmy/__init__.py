@@ -15,6 +15,8 @@ __all__ = [
     "RemoteGeneratorPush",
     "RemoteGeneratorPull",
     "RemoteCoroutine",
+    "remote_generator_push",
+    "remote_generator_pull",
 ]
 
 from .client_async import (
@@ -23,6 +25,8 @@ from .client_async import (
     RemoteGeneratorPull,
     RemoteGeneratorPush,
     create_async_client,
+    remote_generator_pull,
+    remote_generator_push,
 )
 from .client_sync import SyncClient, create_sync_client
 from .common import RemoteException, cancel_task_group_on_signal, scoped_iter

@@ -110,10 +110,13 @@ class RemoteValue:
     def __aiter__(self):
         return self.value.__aiter__()
 
+
 class RemoteGeneratorPush(RemoteValue):
     def __init__(self, value):
         if not inspect.isasyncgen(value):
-            raise TypeError(f"RemoteGeneratorPush can only be used with async generators, recieved: {type(value)}.")
+            raise TypeError(
+                f"RemoteGeneratorPush can only be used with async generators, recieved: {type(value)}."
+            )
         super().__init__(value)
 
 
@@ -124,6 +127,20 @@ class RemoteGeneratorPull(RemoteValue):
 class RemoteCoroutine(RemoteValue):
     def __await__(self):
         return self.value.__await__()
+
+
+def remote_generator_push(method: Callable):
+    def result(*args, **kwargs):
+        return RemoteGeneratorPush(method(*args, **kwargs))
+
+    return result
+
+
+def remote_generator_pull(method: Callable):
+    def result(*args, **kwargs):
+        return RemoteGeneratorPull(method(*args, **kwargs))
+
+    return result
 
 
 class RMY_Pickler(pickle.Pickler):
