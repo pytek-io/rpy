@@ -50,3 +50,4 @@ def test_overflow():
             for i in proxy.count_nowait(120):
                 sleep(0.1)
         assert e_info.value.args[0] == ASYNC_GENERATOR_OVERFLOWED_MESSAGE
+

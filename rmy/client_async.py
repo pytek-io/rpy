@@ -6,17 +6,17 @@ import inspect
 import io
 import pickle
 import queue
+import traceback
 from functools import partial
 from itertools import count
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
-import traceback
 
 import anyio
 import anyio.abc
 import asyncstdlib
 
 from .abc import AsyncSink, Connection
-from .common import cancel_task_on_exit, scoped_insert, RemoteException
+from .common import RemoteException, cancel_task_on_exit, scoped_insert
 from .connection import connect_to_tcp_server
 
 
@@ -102,36 +102,49 @@ class IterationBufferAsync(AsyncSink):
 
 class RemoteValue:
     def __init__(self, value):
-        self.value_id = value
+        self.value = value
+
+    def __iter__(self):
+        return self.value.__iter__()
+
+    def __aiter__(self):
+        return self.value.__aiter__()
+
+class RemoteGeneratorPush(RemoteValue):
+    def __init__(self, value):
+        if not inspect.isasyncgen(value):
+            raise TypeError(f"RemoteGeneratorPush can only be used with async generators, recieved: {type(value)}.")
+        super().__init__(value)
 
 
-class RemoteAsyncGenerator(RemoteValue):
-    pass
-
-
-class RemoteSyncGenerator(RemoteValue):
+class RemoteGeneratorPull(RemoteValue):
     pass
 
 
 class RemoteCoroutine(RemoteValue):
-    pass
+    def __await__(self):
+        return self.value.__await__()
 
 
-class RMYPickler(pickle.Pickler):
+class RMY_Pickler(pickle.Pickler):
+    def __init__(self, client, file):
+        super().__init__(file)
+        self.client = client
+
     def persistent_id(self, obj):
         if isinstance(obj, RemoteValue):
-            return (type(obj).__name__, obj.value_id)
+            return (type(obj).__name__, self.client.store_value(obj.value))
 
 
-class RemoteUnpickler(pickle.Unpickler):
+class RMY_Unpickler(pickle.Unpickler):
     def __init__(self, file, client):
         super().__init__(file)
         self.client = client
 
     def persistent_load(self, value):
         type_tag, payload = value
-        if type_tag in ("RemoteAsyncGenerator", "RemoteSyncGenerator"):
-            synchronize = type_tag == "RemoteSyncGenerator"
+        if type_tag in ("RemoteGeneratorPush", "RemoteGeneratorPull"):
+            synchronize = type_tag == "RemoteGeneratorPull"
             if self.client.client_sync:
                 return self.client.client_sync._sync_generator_iter(synchronize, payload)
             return self.client.fetch_values_async(synchronize, payload)
@@ -144,12 +157,6 @@ class RemoteUnpickler(pickle.Unpickler):
             )
         else:
             raise pickle.UnpicklingError("Unsupported object")
-
-
-def rmy_dumps(value):
-    file = io.BytesIO()
-    RMYPickler(file).dump(value)
-    return file.getvalue()
 
 
 class AsyncCallResult:
@@ -208,7 +215,7 @@ class AsyncClient:
     def __init__(
         self, connection: Connection, async_buffer_size: int = STREAM_BUFFER_SIZE
     ) -> None:
-        connection.set_loads(lambda value: RemoteUnpickler(io.BytesIO(value), self).load())
+        connection.set_loads(self.loads)
         self.connection = connection
         self._async_buffer_size = async_buffer_size
         self.request_id = count()
@@ -222,6 +229,9 @@ class AsyncClient:
 
     def _send_nowait(self, *args):
         self.connection.send_nowait(args)
+
+    def loads(self, value):
+        return RMY_Unpickler(io.BytesIO(value), self).load()
 
     async def _process_messages_from_server(
         self, task_status: anyio.abc.TaskStatus = anyio.TASK_STATUS_IGNORED
@@ -381,7 +391,6 @@ async def create_async_client(connection: Connection) -> AsyncIterator[AsyncClie
 
 @contextlib.asynccontextmanager
 async def connect(host_name: str, port: int) -> AsyncIterator[AsyncClient]:
-    async with anyio.create_task_group() as task_group:
-        async with connect_to_tcp_server(host_name, port) as connection:
-            async with create_async_client(connection) as client:
-                yield client
+    async with connect_to_tcp_server(host_name, port) as connection:
+        async with create_async_client(connection) as client:
+            yield client

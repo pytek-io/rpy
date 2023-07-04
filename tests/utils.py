@@ -11,7 +11,14 @@ import pytest
 
 import rmy.abc
 from rmy.server import Server
-from rmy import AsyncClient, SyncClient, create_async_client, RemoteException
+from rmy import (
+    AsyncClient,
+    SyncClient,
+    create_async_client,
+    RemoteCoroutine,
+    RemoteGeneratorPull,
+    RemoteGeneratorPush,
+)
 from rmy.client_async import ASYNC_GENERATOR_OVERFLOWED_MESSAGE
 
 T_Retval = TypeVar("T_Retval")
@@ -20,6 +27,11 @@ ENOUGH_TIME_TO_COMPLETE_ALL_PENDING_TASKS = 0.1
 A_LITTLE_BIT_OF_TIME = 0.1
 ERROR_MESSAGE = "an error occured"
 TEST_CONNECTION_BUFFER_SIZE = 100
+
+
+async def async_generator(bound: int) -> AsyncIterator[int]:
+    for i in range(bound):
+        yield i
 
 
 class TestConnection(rmy.abc.Connection):
@@ -206,3 +218,16 @@ class RemoteObject:
             yield i
             if i == 3:
                 await self.throw_exception_coroutine(exception)
+
+    def nested_generators(self, bound: int):
+        return [
+            RemoteGeneratorPull(range(bound)),
+            RemoteGeneratorPull(async_generator(bound)),
+            RemoteGeneratorPush(async_generator(bound)),
+        ]
+
+    def nested_coroutine(self):
+        async def test_coroutine():
+            return 1
+
+        return [RemoteCoroutine(test_coroutine())]

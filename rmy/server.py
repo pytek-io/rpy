@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import inspect
@@ -6,6 +7,7 @@ import sys
 import traceback
 from itertools import count
 from typing import Any
+import io
 
 import anyio
 import anyio.abc
@@ -26,11 +28,11 @@ from .client_async import (
     MOVE_GENERATOR_ITERATOR,
     OK,
     SET_ATTRIBUTE,
-    RemoteAsyncGenerator,
     RemoteCoroutine,
-    RemoteSyncGenerator,
+    RemoteGeneratorPull,
+    RemoteGeneratorPush,
     RemoteValue,
-    rmy_dumps,
+    RMY_Pickler,
 )
 from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
 from .connection import TCPConnection
@@ -50,12 +52,17 @@ class ClientSession:
         self.session_manager: Server = server
         self.task_group = task_group
         self.connection = connection
-        connection.set_dumps(rmy_dumps)
+        connection.set_dumps(self.dumps)
         self.running_tasks = {}
         self.pending_results = {}
         self.own_objects = set()
         self.synchronization_indexes = {}
         self.value_id = count(10)
+
+    def dumps(self, value):
+        file = io.BytesIO()
+        RMY_Pickler(self, file).dump(value)
+        return file.getvalue()
 
     async def send(self, code: str, request_id: int, status: str, value: Any):
         await self.connection.send((code, request_id, status, value))
@@ -175,16 +182,18 @@ class ClientSession:
 
     async def evaluate_method(self, request_id, object_id, method, args, kwargs):
         result = method(self.session_manager.objects[object_id], *args, **kwargs)
-        serializable_result = result
         if inspect.iscoroutine(result):
-            serializable_result = RemoteCoroutine(next(self.value_id))
+            result = RemoteCoroutine(result)
         elif inspect.isasyncgen(result):
-            serializable_result = RemoteAsyncGenerator(next(self.value_id))
+            result = RemoteGeneratorPush(result)
         elif inspect.isgenerator(result):
-            serializable_result = RemoteSyncGenerator(next(self.value_id))
-        if isinstance(serializable_result, RemoteValue):
-            self.pending_results[serializable_result.value_id] = result
-        await self.send(EVALUATE_METHOD, request_id, OK, serializable_result)
+            result = RemoteGeneratorPull(result)
+        await self.send(EVALUATE_METHOD, request_id, OK, result)
+
+    def store_value(self, value: Any):
+        value_id = next(self.value_id)
+        self.pending_results[value_id] = value
+        return value_id
 
     async def process_messages(self):
         async for task_code, request_id, payload in self.connection:
