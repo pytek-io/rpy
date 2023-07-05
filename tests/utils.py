@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 import contextlib
+from itertools import count
 from pickle import dumps, loads
 from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar
 
@@ -10,16 +10,18 @@ import anyio.lowlevel
 import pytest
 
 import rmy.abc
-from rmy.server import Server
 from rmy import (
     AsyncClient,
-    SyncClient,
-    create_async_client,
     RemoteCoroutine,
     RemoteGeneratorPull,
     RemoteGeneratorPush,
+    SyncClient,
+    create_async_client,
+    remote_generator_pull,
 )
 from rmy.client_async import ASYNC_GENERATOR_OVERFLOWED_MESSAGE
+from rmy.server import Server
+
 
 T_Retval = TypeVar("T_Retval")
 
@@ -50,7 +52,10 @@ class TestConnection(rmy.abc.Connection):
         self.loads = loads
 
     def send_nowait(self, message: Tuple[Any, ...]):
-        return self.sink.send_nowait(self.dumps(message))
+        try:
+            return self.sink.send_nowait(self.dumps(message))
+        except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+            print(f"Sending {message} failed, {self.name} did not send anything.")
 
     async def drain(self):
         await anyio.lowlevel.checkpoint()
@@ -199,18 +204,20 @@ class RemoteObject:
     def count_sync(self, bound: int) -> Iterator[int]:
         try:
             for i in range(bound):
-                # time.sleep(A_LITTLE_BIT_OF_TIME)
                 self.current_value = i
-                print(f"Sending {i}")
                 yield i
         except GeneratorExit:
             print("Generator exit")
         finally:
             self.finally_called = True
 
-    async def count_nowait(self, bound: int) -> AsyncIterator[int]:
-        for i in range(bound):
-            yield i
+    async def count_to_infinity_nowait(self) -> AsyncIterator[int]:
+        counter = count()
+        while True:
+            result = next(counter)
+            if result > 120:
+                break
+            yield result
 
     async def async_generator_exception(self, exception) -> AsyncIterator[int]:
         for i in range(10):
@@ -231,3 +238,9 @@ class RemoteObject:
             return 1
 
         return [RemoteCoroutine(test_coroutine())]
+
+    @remote_generator_pull
+    async def remote_generator_pull_synced(self) -> AsyncIterator[int]:
+        counter = count()
+        while True:
+            yield next(counter)

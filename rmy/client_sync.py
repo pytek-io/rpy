@@ -23,12 +23,12 @@ class SyncClient:
         self.portal = portal
         self.async_client: AsyncClient = async_client
 
-    def _sync_generator_iter(self, synchronize, generator_id):
+    def _sync_generator_iter(self, generator_id, synchronize):
         with self.portal.wrap_async_context_manager(
-            self.async_client._remote_sync_generator_iter(generator_id)
-        ) as sync_iterator:
+            self.async_client._remote_sync_generator_iter(generator_id, synchronize)
+        ) as queue:
             for index, (terminated, value) in enumerate(
-                itertools.starmap(decode_iteration_result, sync_iterator)
+                itertools.starmap(decode_iteration_result, queue)
             ):
                 if terminated:
                     break

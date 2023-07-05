@@ -31,7 +31,6 @@ from .client_async import (
     RemoteCoroutine,
     RemoteGeneratorPull,
     RemoteGeneratorPush,
-    RemoteValue,
     RMY_Pickler,
 )
 from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
@@ -90,13 +89,13 @@ class ClientSession:
                         await index_and_event[1].wait()
             return CLOSE_SENTINEL, None
 
-    def iterate_generator(self, request_id: int, iterator_id: int):
+    def iterate_generator(self, request_id: int, iterator_id: int, synchronize: bool):
         if not (generator := self.pending_results.pop(iterator_id, None)):
             return
         method = (
-            self.iterate_through_async_generator_unsync
-            if inspect.isasyncgen(generator)
-            else self.iterate_through_async_generator_sync
+            self.iterate_through_async_generator_sync
+            if synchronize
+            else self.iterate_through_async_generator_unsync
         )
         self.cancellable_run_task(
             request_id, ITERATE_GENERATOR, method(request_id, iterator_id, generator)

@@ -33,7 +33,7 @@ async def test_async_generator_exception():
                     assert i == value
 
 
-async def test_stream_early_exit():
+async def test_early_exit():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         async with scoped_iter(proxy.count(100)) as numbers:
             async for i in numbers:
@@ -48,7 +48,16 @@ async def test_stream_early_exit():
 async def test_overflow():
     async with create_proxy_object_async(RemoteObject()) as proxy:
         with pytest.raises(Exception) as e_info:
-            async for i in proxy.count_nowait(120):
-                await sleep(0.1)
+            async with scoped_iter(proxy.count_to_infinity_nowait()) as numbers:
+                async for i in numbers:
+                    await sleep(0.1)
         assert e_info.value.args[0] == ASYNC_GENERATOR_OVERFLOWED_MESSAGE
 
+
+async def test_remote_generator_pull_decorator():
+    async with create_proxy_object_async(RemoteObject()) as proxy:
+        async for i, value in enumerate(proxy.remote_generator_pull_synced()):
+            await sleep(0.1)
+            assert i == value
+            if i == 3:
+                break

@@ -7,7 +7,7 @@ import io
 import pickle
 import queue
 import traceback
-from functools import partial
+from functools import partial, wraps
 from itertools import count
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
@@ -115,7 +115,7 @@ class RemoteGeneratorPush(RemoteValue):
     def __init__(self, value):
         if not inspect.isasyncgen(value):
             raise TypeError(
-                f"RemoteGeneratorPush can only be used with async generators, recieved: {type(value)}."
+                f"RemoteGeneratorPush can only be used with async generators, received: {type(value)}."
             )
         super().__init__(value)
 
@@ -130,6 +130,7 @@ class RemoteCoroutine(RemoteValue):
 
 
 def remote_generator_push(method: Callable):
+    @wraps(method)
     def result(*args, **kwargs):
         return RemoteGeneratorPush(method(*args, **kwargs))
 
@@ -137,6 +138,7 @@ def remote_generator_push(method: Callable):
 
 
 def remote_generator_pull(method: Callable):
+    @wraps(method)
     def result(*args, **kwargs):
         return RemoteGeneratorPull(method(*args, **kwargs))
 
@@ -154,17 +156,17 @@ class RMY_Pickler(pickle.Pickler):
 
 
 class RMY_Unpickler(pickle.Unpickler):
-    def __init__(self, file, client):
+    def __init__(self, file, client: AsyncClient):
         super().__init__(file)
-        self.client = client
+        self.client: AsyncClient = client
 
     def persistent_load(self, value):
         type_tag, payload = value
         if type_tag in ("RemoteGeneratorPush", "RemoteGeneratorPull"):
             synchronize = type_tag == "RemoteGeneratorPull"
             if self.client.client_sync:
-                return self.client.client_sync._sync_generator_iter(synchronize, payload)
-            return self.client.fetch_values_async(synchronize, payload)
+                return self.client.client_sync._sync_generator_iter(payload, synchronize)
+            return self.client.fetch_values_async(payload, synchronize)
         elif type_tag == "RemoteCoroutine":
             return self.client._execute_request(
                 AWAIT_COROUTINE,
@@ -310,11 +312,11 @@ class AsyncClient:
             result = await result
         return result
 
-    async def fetch_values_async(self, synchronize: bool, value_id: int):
+    async def fetch_values_async(self, generator_id: int, synchronize: bool):
         queue = IterationBufferAsync(self._async_buffer_size)
         request_id = next(self.request_id)
         with scoped_insert(self.pending_requests, request_id, queue):
-            await self._send(ITERATE_GENERATOR, request_id, (value_id,))
+            await self._send(ITERATE_GENERATOR, request_id, (generator_id, synchronize))
             try:
                 async for index, (terminated, value) in asyncstdlib.enumerate(
                     asyncstdlib.starmap(decode_iteration_result, queue)
@@ -323,7 +325,7 @@ class AsyncClient:
                         break
                     yield value
                     if synchronize:
-                        await self._send(MOVE_GENERATOR_ITERATOR, value_id, (index + 1,))
+                        await self._send(MOVE_GENERATOR_ITERATOR, generator_id, (index + 1,))
             finally:
                 await self._cancel_request(request_id)
 
@@ -338,12 +340,12 @@ class AsyncClient:
             yield value
 
     @contextlib.asynccontextmanager
-    async def _remote_sync_generator_iter(self, iterator_id: int):
+    async def _remote_sync_generator_iter(self, iterator_id: int, synchronize: bool):
         queue = IterationBufferSync(self._async_buffer_size)
         request_id = next(self.request_id)
         with scoped_insert(self.pending_requests, request_id, queue):
             try:
-                await self._send(ITERATE_GENERATOR, request_id, (iterator_id,))
+                await self._send(ITERATE_GENERATOR, request_id, (iterator_id, synchronize))
                 yield queue
             finally:
                 await self._cancel_request(request_id)
