@@ -5,11 +5,11 @@ from typing import Any, AsyncIterator, Callable, Tuple
 
 class Connection(AsyncIterator[Any], metaclass=ABCMeta):
     @abstractmethod
-    async def send(self, message: Tuple[Any, ...]):
+    async def send(self, message: Tuple[Any, ...]) -> int:
         ...
 
     @abstractmethod
-    def send_nowait(self, message: Tuple[Any, ...]):
+    def send_nowait(self, message: Tuple[Any, ...]) -> int:
         ...
 
     @abstractmethod
@@ -31,5 +31,5 @@ class Connection(AsyncIterator[Any], metaclass=ABCMeta):
 
 class AsyncSink:
     @abstractmethod
-    def set_result(self, value: Any):
+    def set_result(self, value: Any, message_size: int):
         ...

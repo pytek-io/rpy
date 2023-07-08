@@ -39,20 +39,23 @@ class TCPConnection(Connection):
     def set_loads(self, loads: Callable[[bytes], Any]):
         self.loads = loads
 
-    def send_nowait(self, message: Tuple[Any, ...]):
+    def send_nowait(self, message: Tuple[Any, ...]) -> int:
         message_as_bytes = self.dumps(message)
         self.writer.write(struct.pack(FORMAT, len(message_as_bytes)) + message_as_bytes)
+        return len(message_as_bytes)
 
-    async def drain(self):
-        await self.writer.drain()
-
-    async def send(self, message: Tuple[Any, ...]):
-        self.send_nowait(message)
+    async def send(self, message: Tuple[Any, ...]) -> int:
+        message_size = self.send_nowait(message)
         try:
             await self.writer.drain()
+            return message_size
         except ConnectionResetError:
             if self.throw_on_eof:
                 raise
+        return 0
+
+    async def drain(self):
+        await self.writer.drain()
 
     def close(self):
         self._closing = True

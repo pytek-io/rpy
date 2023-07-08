@@ -6,7 +6,7 @@ import inspect
 import sys
 import traceback
 from itertools import count
-from typing import Any
+from typing import Any, Dict
 import io
 
 import anyio
@@ -26,6 +26,7 @@ from .client_async import (
     GET_ATTRIBUTE,
     ITERATE_GENERATOR,
     MOVE_GENERATOR_ITERATOR,
+    ASYNC_GENERATOR_OVERFLOWED_MESSAGE,
     OK,
     SET_ATTRIBUTE,
     RemoteCoroutine,
@@ -35,7 +36,7 @@ from .client_async import (
 )
 from .common import RemoteException, cancel_task_group_on_signal, scoped_insert
 from .connection import TCPConnection
-
+MAX_DATA_IN_FLIGHT = 1_000
 
 async def wrap_sync_generator(sync_generator):
     for value in sync_generator:
@@ -46,16 +47,22 @@ async def wrap_coroutine(coroutine):
     return OK, await coroutine
 
 
+class GeneratorState:
+    def __init__(self):
+        self.messages_in_flight_total_size = 0
+        self.acknowledged_message = anyio.Event()
+
+
 class ClientSession:
     def __init__(self, server, task_group, connection: Connection) -> None:
         self.session_manager: Server = server
         self.task_group = task_group
         self.connection = connection
         connection.set_dumps(self.dumps)
-        self.running_tasks = {}
+        self.tasks_cancel_callbacks = {}
         self.pending_results = {}
         self.own_objects = set()
-        self.synchronization_indexes = {}
+        self.generator_states: Dict[int, GeneratorState] = {}
         self.value_id = count(10)
 
     def dumps(self, value):
@@ -63,42 +70,36 @@ class ClientSession:
         RMY_Pickler(self, file).dump(value)
         return file.getvalue()
 
-    async def send(self, code: str, request_id: int, status: str, value: Any):
-        await self.connection.send((code, request_id, status, value))
+    async def send(self, code: str, request_id: int, status: str, value: Any) -> int:
+        return await self.connection.send((code, request_id, status, value))
 
-    def send_nowait(self, code: str, request_id: int, status: str, value: Any):
-        self.connection.send_nowait((code, request_id, status, value))
+    def send_nowait(self, code: str, request_id: int, status: str, value: Any) -> int:
+        return self.connection.send_nowait((code, request_id, status, value))
 
-    async def iterate_through_async_generator_unsync(
-        self, request_id: int, iterator_id: int, coroutine_or_async_generator
+    async def iterate_through_async_generator(
+        self, request_id: int, iterator_id: int, coroutine_or_async_generator, pull_or_push: bool
     ):
-        async with asyncstdlib.scoped_iter(coroutine_or_async_generator) as aiter:
-            async for value in aiter:
-                await self.send(ITERATE_GENERATOR, request_id, OK, value)
-        return CLOSE_SENTINEL, None
-
-    async def iterate_through_async_generator_sync(
-        self, request_id: int, iterator_id: int, coroutine_or_async_generator
-    ):
-        index_and_event = [0, anyio.Event()]
-        with scoped_insert(self.synchronization_indexes, iterator_id, index_and_event):
+        generator_state = GeneratorState()
+        with scoped_insert(self.generator_states, iterator_id, generator_state):
             async with asyncstdlib.scoped_iter(coroutine_or_async_generator) as aiter:
-                async for index, value in asyncstdlib.enumerate(aiter):
-                    await self.send(ITERATE_GENERATOR, request_id, OK, value)
-                    if index >= index_and_event[0]:
-                        await index_and_event[1].wait()
+                async for value in aiter:
+                    message_size = await self.send(ITERATE_GENERATOR, request_id, OK, value)
+                    generator_state.messages_in_flight_total_size += message_size
+                    if generator_state.messages_in_flight_total_size > MAX_DATA_IN_FLIGHT:
+                        if pull_or_push:
+                            await self.send(ITERATE_GENERATOR, request_id, "PULL", None)
+                        else:
+                            raise OverflowError(ASYNC_GENERATOR_OVERFLOWED_MESSAGE)
+                        await generator_state.acknowledged_message.wait()
             return CLOSE_SENTINEL, None
 
-    def iterate_generator(self, request_id: int, iterator_id: int, synchronize: bool):
+    def iterate_generator(self, request_id: int, iterator_id: int, pull_or_push: bool):
         if not (generator := self.pending_results.pop(iterator_id, None)):
             return
-        method = (
-            self.iterate_through_async_generator_sync
-            if synchronize
-            else self.iterate_through_async_generator_unsync
-        )
         self.cancellable_run_task(
-            request_id, ITERATE_GENERATOR, method(request_id, iterator_id, generator)
+            request_id,
+            ITERATE_GENERATOR,
+            self.iterate_through_async_generator(request_id, iterator_id, generator, pull_or_push),
         )
 
     def evaluate_coroutine(self, request_id: int, coroutine_id: int):
@@ -123,7 +124,9 @@ class ClientSession:
     def cancellable_run_task(self, request_id, task_code, coroutine_or_async_context):
         async def task():
             task_group = anyio.create_task_group()
-            with scoped_insert(self.running_tasks, request_id, task_group.cancel_scope.cancel):
+            with scoped_insert(
+                self.tasks_cancel_callbacks, request_id, task_group.cancel_scope.cancel
+            ):
                 async with task_group:
                     task_group.start_soon(
                         self.run_task,
@@ -170,14 +173,13 @@ class ClientSession:
         await self.send(SET_ATTRIBUTE, request_id, code, result)
 
     async def cancel_task(self, request_id: int):
-        if running_task := self.running_tasks.get(request_id):
-            running_task()
+        if running_task_cancel_callback := self.tasks_cancel_callbacks.get(request_id):
+            running_task_cancel_callback()
 
-    def move_async_generator_index(self, request_id: int, index: int):
-        if index_and_event := self.synchronization_indexes.get(request_id, None):
-            index_and_event[1].set()
-            index_and_event[0] = index
-            index_and_event[1] = anyio.Event()
+    def move_async_generator_index(self, request_id: int, message_size: int):
+        if generator_state := self.generator_states.get(request_id):
+            generator_state.messages_in_flight_total_size -= message_size
+            generator_state.acknowledged_message.set()
 
     async def evaluate_method(self, request_id, object_id, method, args, kwargs):
         result = method(self.session_manager.objects[object_id], *args, **kwargs)

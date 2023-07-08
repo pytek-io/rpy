@@ -1,5 +1,4 @@
 import contextlib
-import itertools
 import inspect
 from typing import Iterator
 
@@ -14,6 +13,7 @@ from .client_async import (
     decode_iteration_result,
 )
 
+
 async def await_awaitable(awaitable):
     return await awaitable
 
@@ -23,22 +23,21 @@ class SyncClient:
         self.portal = portal
         self.async_client: AsyncClient = async_client
 
-    def _sync_generator_iter(self, generator_id, synchronize):
+    def _sync_generator_iter(self, generator_id, pull_or_push):
         with self.portal.wrap_async_context_manager(
-            self.async_client._remote_sync_generator_iter(generator_id, synchronize)
+            self.async_client._remote_sync_generator_iter(generator_id, pull_or_push)
         ) as queue:
-            for index, (terminated, value) in enumerate(
-                itertools.starmap(decode_iteration_result, queue)
-            ):
+            for code, result, message_size in queue:
+                terminated, value = decode_iteration_result(code, result)
                 if terminated:
                     break
                 yield value
-                if synchronize:
+                if pull_or_push:
                     self.portal.call(
                         self.async_client._send,
                         MOVE_GENERATOR_ITERATOR,
                         generator_id,
-                        (index + 1,),
+                        (message_size,),
                     )
 
     def _wrap_function(self, object_id, function):

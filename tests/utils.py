@@ -2,7 +2,7 @@ from __future__ import annotations
 import contextlib
 from itertools import count
 from pickle import dumps, loads
-from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar
+from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar, Optional
 
 import anyio
 import anyio.abc
@@ -51,22 +51,28 @@ class TestConnection(rmy.abc.Connection):
     def set_loads(self, loads):
         self.loads = loads
 
-    def send_nowait(self, message: Tuple[Any, ...]):
+    def send_nowait(self, message: Tuple[Any, ...]) -> int:
         try:
-            return self.sink.send_nowait(self.dumps(message))
+            serialized_message = self.dumps(message)
+            self.sink.send_nowait(serialized_message)
+            return len(serialized_message)
         except (anyio.BrokenResourceError, anyio.ClosedResourceError):
             print(f"Sending {message} failed, {self.name} did not send anything.")
+        return 0
 
-    async def drain(self):
-        await anyio.lowlevel.checkpoint()
-
-    async def send(self, message):
+    async def send(self, message) -> int:
         try:
-            await self.sink.send(self.dumps(message))
+            serialized_message = self.dumps(message)
+            await self.sink.send(serialized_message)
+            return len(serialized_message)
         except anyio.get_cancelled_exc_class():
             print(f"Sending {message} has been cancelled. {self} did not send anything.")
         except (anyio.BrokenResourceError, anyio.ClosedResourceError):
             print(f"Sending {message} failed, {self.name} did not send anything.")
+        return 0
+
+    async def drain(self):
+        await anyio.lowlevel.checkpoint()
 
     async def __anext__(self) -> Any:
         try:
@@ -212,12 +218,15 @@ class RemoteObject:
             self.finally_called = True
 
     async def count_to_infinity_nowait(self) -> AsyncIterator[int]:
-        counter = count()
-        while True:
-            result = next(counter)
-            if result > 120:
-                break
-            yield result
+        try:
+            counter = count()
+            while True:
+                result = next(counter)
+                yield 10 * "abcdedfghijklmnopqrstuvwxyz"
+        except Exception as e:
+            print("Generator exit")
+        finally:
+            self.finally_called = True
 
     async def async_generator_exception(self, exception) -> AsyncIterator[int]:
         for i in range(10):
