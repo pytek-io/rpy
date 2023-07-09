@@ -44,7 +44,7 @@ ASYNC_SETATTR_ERROR_MESSAGE = "Cannot set attribute on remote object in async mo
 We intentionally do not support setting attributes using assignment operator on remote objects in async mode. \
 This is because it is not a good practice not too wait until a remote operation completes."
 
-ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Async generator overflowed."
+ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Generator iteration overflowed."
 
 REQUEST_CODES = (
     EVALUATE_METHOD,
@@ -98,7 +98,7 @@ class RemoteValue:
 
 
 class RemoteGeneratorPush(RemoteValue):
-    def __init__(self, value):
+    def __init__(self, value, max_data_in_flight_size=100, max_data_in_flight_count=100):
         if not inspect.isasyncgen(value):
             raise TypeError(
                 f"RemoteGeneratorPush can only be used with async generators, received: {type(value)}."

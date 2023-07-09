@@ -50,7 +50,7 @@ def test_overflow():
             with scoped_iter(proxy.count_to_infinity_nowait()) as numbers:
                 for i in numbers:
                     sleep(0.1)
-        assert e_info.value.args[0] == ASYNC_GENERATOR_OVERFLOWED_MESSAGE
+        assert ASYNC_GENERATOR_OVERFLOWED_MESSAGE in e_info.value.args[0]
 
 
 def test_remote_generator_pull_decorator():

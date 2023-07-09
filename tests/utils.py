@@ -221,10 +221,7 @@ class RemoteObject:
         try:
             counter = count()
             while True:
-                result = next(counter)
-                yield 10 * "abcdedfghijklmnopqrstuvwxyz"
-        except Exception as e:
-            print("Generator exit")
+                yield next(counter)
         finally:
             self.finally_called = True
 
