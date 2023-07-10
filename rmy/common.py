@@ -2,10 +2,32 @@ import asyncio
 import contextlib
 import signal
 import traceback
-from typing import Coroutine
+from typing import Coroutine, Callable, TypeVar, Awaitable
 
 import anyio
 import anyio.abc
+import sys
+
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec
+else:
+    from typing_extensions import ParamSpec
+
+T_Retval = TypeVar("T_Retval")
+T_ParamSpec = ParamSpec("T_ParamSpec")
+T = TypeVar("T")
+
+
+def as_async(
+    sync_function: Callable[T_ParamSpec, T_Retval]
+) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
+    return sync_function  # type: ignore
+
+
+def as_sync(
+    async_function: Callable[T_ParamSpec, Awaitable[T_Retval]]
+) -> Callable[T_ParamSpec, T_Retval]:
+    return async_function  # type: ignore
 
 
 @contextlib.contextmanager

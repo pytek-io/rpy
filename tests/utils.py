@@ -2,7 +2,7 @@ from __future__ import annotations
 import contextlib
 from itertools import count
 from pickle import dumps, loads
-from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar, Optional
+from typing import Any, AsyncIterator, Iterator, List, Tuple, TypeVar
 
 import anyio
 import anyio.abc
