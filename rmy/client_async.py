@@ -46,16 +46,6 @@ This is because it is not a good practice not too wait until a remote operation 
 
 ASYNC_GENERATOR_OVERFLOWED_MESSAGE = "Generator iteration overflowed."
 
-REQUEST_CODES = (
-    EVALUATE_METHOD,
-    GET_ATTRIBUTE,
-    CREATE_OBJECT,
-    FETCH_OBJECT,
-    SET_ATTRIBUTE,
-    ITERATE_GENERATOR,
-    AWAIT_COROUTINE,
-)
-
 
 class IterationBufferSync(AsyncSink):
     def __init__(self) -> None:
@@ -183,7 +173,7 @@ class AsyncCallResult:
         )
 
 
-def decode_result(code, result, include_code=True):
+def decode_result(code, result, _message_size, include_code=True):
     if code in (CANCEL_TASK, OK):
         return (code, result) if include_code else result
     if code == EXCEPTION:
@@ -242,16 +232,11 @@ class AsyncClient:
         self, task_status: anyio.abc.TaskStatus = anyio.TASK_STATUS_IGNORED
     ):
         task_status.started()
-        async for x in self.connection:
-            message_size, (code, message_id, status, result) = x
-            if code in REQUEST_CODES:
-                if future := self.pending_requests.get(message_id):
-                    message = (status, result, message_size) if code == ITERATE_GENERATOR else (status, result)
-                    future.set_result(message)
-            elif code == CANCEL_TASK:
-                print("Task cancelled.", message_id, status, result)
+        async for message_size, (request_id, status, result) in self.connection:
+            if future := self.pending_requests.get(request_id):
+                future.set_result((status, result, message_size))
             else:
-                print(f"Unexpected code {code} received.")
+                print(f"Unexpected request id {request_id} received.")
 
     @contextlib.contextmanager
     def _submit_request(self, code, args, is_cancellable=False):
@@ -282,7 +267,7 @@ class AsyncClient:
         return AsyncCallResult(self, object_id, function, args, kwargs)
 
     def _cancel_request_no_wait(self, request_id: int):
-        self._send_nowait(CANCEL_TASK, request_id, None)
+        self._send_nowait(CANCEL_TASK, request_id, ())
         self.pending_requests.pop(request_id, None)
 
     async def _cancel_request(self, request_id: int):
@@ -347,7 +332,7 @@ class AsyncClient:
             yield await self._fetch_remote_object(object_id, sync_client)
         finally:
             with anyio.CancelScope(shield=True):
-                await self._send(DELETE_OBJECT, 0, object_id)
+                await self._send(DELETE_OBJECT, next(self.request_id), (object_id,))
 
     async def _fetch_remote_object(
         self, object_id: int = SERVER_OBJECT_ID, sync_client: Optional[SyncClient] = None
