@@ -126,7 +126,8 @@ class ClientSession:
     def iterate_generator(self, request_id: int, iterator_id: int, pull_or_push: bool):
         if not (generator := self.pending_results.pop(iterator_id, None)):
             return
-        self.cancellable_run_task(
+        self.task_group.start_soon(
+            self.cancellable_run_task,
             request_id,
             self.iterate_through_async_generator(request_id, iterator_id, generator, pull_or_push),
         )
@@ -134,7 +135,9 @@ class ClientSession:
     def evaluate_coroutine(self, request_id: int, coroutine_id: int):
         if not (coroutine := self.pending_results.pop(coroutine_id, None)):
             return
-        self.cancellable_run_task(request_id, wrap_coroutine(coroutine))
+        self.task_group.start_soon(
+            self.cancellable_run_task, request_id, wrap_coroutine(coroutine)
+        )
 
     async def run_task(self, request_id, coroutine_or_async_generator):
         status, result = EXCEPTION, None
@@ -150,20 +153,12 @@ class ClientSession:
             with anyio.CancelScope(shield=True):
                 await self.send(request_id, status, result)
 
-    def cancellable_run_task(self, request_id, coroutine_or_async_context):
-        async def task():
-            task_group = anyio.create_task_group()
-            with scoped_insert(
-                self.tasks_cancel_callbacks, request_id, task_group.cancel_scope.cancel
-            ):
-                async with task_group:
-                    task_group.start_soon(
-                        self.run_task,
-                        request_id,
-                        coroutine_or_async_context,
-                    )
-
-        self.task_group.start_soon(task)
+    async def cancellable_run_task(self, request_id, coroutine_or_async_context):
+        task = asyncio.create_task(self.run_task(request_id, coroutine_or_async_context))
+        with scoped_insert(
+            self.tasks_cancel_callbacks, request_id, task.cancel
+        ):
+            await task
 
     async def create_object(self, request_id, object_class, args, kwarg):
         object_id = next(self.server.object_id)
